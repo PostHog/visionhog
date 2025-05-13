@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Viewing {{ stream.name }} - VisionHog</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.4.8/dist/hls.min.js"></script>
+</head>
+<body>
+    <header>
+        <h1>VisionHog</h1>
+        <p>Viewing Stream: {{ stream.name }}</p>
+    </header>
+    
+    <main class="view-page">
+        <div class="video-container">
+            <video id="video" controls autoplay muted></video>
+        </div>
+        
+        <div class="stream-details">
+            <h2>{{ stream.name }}</h2>
+            <p>Started: <time datetime="{{ stream.start_time }}">{{ stream.start_time }}</time></p>
+            <p class="stream-status">Status: <span id="status">Connecting...</span></p>
+            <a href="/" class="back-btn">Back to Streams</a>
+        </div>
+    </main>
+
+    <footer>
+        <p>VisionHog RTMP Server</p>
+    </footer>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const videoElement = document.getElementById('video');
+            const statusElement = document.getElementById('status');
+            const streamName = '{{ stream.name }}';
+            
+            // Get the HLS URL from the stream info
+            const hlsUrl = '{{ stream.hls_url }}';
+            
+            // Update status
+            function updateStatus(status, isError = false) {
+                statusElement.textContent = status;
+                if (isError) {
+                    statusElement.classList.add('error');
+                } else {
+                    statusElement.classList.remove('error');
+                }
+            }
+            
+            // Function to initialize HLS playback
+            function initializeHls() {
+                updateStatus('Connecting...');
+                
+                if (Hls.isSupported()) {
+                    const hls = new Hls({
+                        debug: false,
+                        enableWorker: true,
+                        lowLatencyMode: true,
+                        backBufferLength: 90
+                    });
+                    
+                    hls.loadSource(hlsUrl);
+                    hls.attachMedia(videoElement);
+                    
+                    hls.on(Hls.Events.MANIFEST_PARSED, function() {
+                        videoElement.play()
+                            .then(() => {
+                                updateStatus('Live');
+                            })
+                            .catch(error => {
+                                console.error('Playback error:', error);
+                                updateStatus('Playback error: ' + error.message, true);
+                            });
+                    });
+                    
+                    hls.on(Hls.Events.ERROR, function(event, data) {
+                        if (data.fatal) {
+                            switch(data.type) {
+                                case Hls.ErrorTypes.NETWORK_ERROR:
+                                    updateStatus('Network error - Retrying...', true);
+                                    hls.startLoad();
+                                    break;
+                                case Hls.ErrorTypes.MEDIA_ERROR:
+                                    updateStatus('Media error - Recovering...', true);
+                                    hls.recoverMediaError();
+                                    break;
+                                default:
+                                    updateStatus('Fatal error: ' + data.details, true);
+                                    console.error('Fatal error:', data);
+                                    break;
+                            }
+                        }
+                    });
+                } 
+                // For browsers that natively support HLS (like Safari)
+                else if (videoElement.canPlayType('application/vnd.apple.mpegurl')) {
+                    videoElement.src = hlsUrl;
+                    videoElement.addEventListener('loadedmetadata', function() {
+                        videoElement.play()
+                            .then(() => {
+                                updateStatus('Live');
+                            })
+                            .catch(error => {
+                                console.error('Playback error:', error);
+                                updateStatus('Playback error: ' + error.message, true);
+                            });
+                    });
+                    
+                    videoElement.addEventListener('error', function(e) {
+                        updateStatus('Video playback error', true);
+                        console.error('Video error:', e);
+                    });
+                }
+                // Fallback message
+                else {
+                    document.querySelector('.video-container').innerHTML = 
+                        '<div class="error">Your browser does not support HLS playback.</div>';
+                    updateStatus('Browser not supported', true);
+                }
+            }
+            
+            // Initialize HLS playback
+            initializeHls();
+            
+            // Check if stream is still active every 10 seconds
+            const checkInterval = setInterval(function() {
+                fetch('/streams')
+                    .then(response => response.json())
+                    .then(data => {
+                        const streamExists = data.streams.some(s => s.name === streamName);
+                        if (!streamExists) {
+                            clearInterval(checkInterval);
+                            updateStatus('Stream ended', true);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error checking stream status:', error);
+                    });
+            }, 10000);
+        });
+    </script>
+</body>
+</html>
