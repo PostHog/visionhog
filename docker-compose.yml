@@ -12,16 +12,3 @@ services:
     volumes:
       - ./srs:/usr/local/srs/conf
     restart: unless-stopped
-
-  visionhog:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    depends_on:
-      - srs
-    environment:
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-    volumes:
-      - ./video_clips:/app/video_clips
-      - ./processed_clips:/app/processed_clips
-    restart: unless-stopped
