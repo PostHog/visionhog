@@ -78,6 +78,7 @@ manager = ConnectionManager()
 # Pydantic model for prompt updates
 class PromptUpdate(BaseModel):
     prompt: str
+    emit_events: Optional[bool] = None
 
 def get_team_prompt(db: Session, team_id: str) -> str:
     """Get the prompt for a specific team from the database"""
@@ -87,13 +88,7 @@ def get_team_prompt(db: Session, team_id: str) -> str:
         default_prompt = """
 Analyze this video of a retail environment and identify key customer events and interactions.
 For each event, provide a description and its approximate timestamp in the video.
-
-CRITICAL: You must return ONLY a valid JSON array. No other text, explanations, or formatting outside the JSON array is allowed.
-DO NOT wrap the response in markdown code blocks (no ```json or ``` markers).
-DO NOT add any text before or after the JSON array.
-The response must be parseable by JSON.parse() or json.loads() without any preprocessing.
-
-Return a JSON array of objects that follows PostHog's event schema. Each object must have the following fields:
+Return the output as a valid JSON array of objects that follows PostHog's event schema. Each object must have the following fields:
 
 - "event": String - The specific customer action (e.g., "CustomerEntered", "ProductInteraction", "CustomerExited")
 - "properties": Object containing:
@@ -104,7 +99,7 @@ Return a JSON array of objects that follows PostHog's event schema. Each object 
   - "duration_seconds": Number - Approximate duration of the activity in seconds
   - "interaction_type": String - Type of activity (e.g., "entry_exit", "product_engagement", "service_usage", "staff_interaction")
 
-Example of expected JSON output (this is the ONLY format allowed, with NO markdown formatting):
+  Example of expected JSON output:
 [
   {
     "event": "CustomerEntered",
@@ -127,20 +122,33 @@ Example of expected JSON output (this is the ONLY format allowed, with NO markdo
       "duration_seconds": 25,
       "interaction_type": "product_engagement"
     }
+  },
+  {
+    "event": "StaffInteraction",
+    "properties": {
+      "timestamp": "00:02:15",
+      "distinct_id": "customer_1",
+      "description": "Customer speaks with staff member",
+      "location": "help_desk",
+      "duration_seconds": 45,
+      "interaction_type": "staff_interaction"
+    }
+  },
+  {
+    "event": "CustomerExited",
+    "properties": {
+      "timestamp": "00:05:30",
+      "distinct_id": "customer_1",
+      "description": "Customer leaves through the main exit",
+      "location": "exit",
+      "duration_seconds": 8,
+      "interaction_type": "entry_exit"
+    }
   }
 ]
 
-IMPORTANT VALIDATION RULES:
-1. The response must be ONLY the JSON array, with no additional text before or after
-2. DO NOT use markdown code block syntax (no ```json or ``` markers)
-3. All strings must be properly quoted with double quotes
-4. All property names must be properly quoted with double quotes
-5. No trailing commas in arrays or objects
-6. No comments or explanations outside the JSON
-7. If no events are found, return an empty array: []
-8. All timestamps must be in "HH:MM:SS" format
-9. All duration_seconds must be numbers, not strings
-10. All distinct_ids must be strings
+Ensure the output is only the JSON array and nothing else.
+If no specific events are identifiable, return an empty array [].
 
 Common event types to look for:
 - CustomerEntered: When a customer enters the retail space
@@ -259,16 +267,26 @@ async def get_prompt(db: Session = Depends(get_db)):
 
 @app.post("/prompt")
 async def update_prompt(prompt_update: PromptUpdate, db: Session = Depends(get_db)):
-    """Update the prompt used for video analysis"""
+    """Update the prompt used for video analysis and optionally update emit_events flag"""
     stream = db.query(StreamDB).filter(StreamDB.team == "2").first()
     if stream is None:
-        stream = StreamDB(team="2", prompt=prompt_update.prompt)
+        stream = StreamDB(
+            team="2",
+            prompt=prompt_update.prompt,
+            emit_events=prompt_update.emit_events if prompt_update.emit_events is not None else False
+        )
         db.add(stream)
     else:
         stream.prompt = prompt_update.prompt
+        if prompt_update.emit_events is not None:
+            stream.emit_events = prompt_update.emit_events
     db.commit()
     db.refresh(stream)
-    return {"message": "Prompt updated successfully", "prompt": stream.prompt}
+    return {
+        "message": "Prompt updated successfully",
+        "prompt": stream.prompt,
+        "emit_events": stream.emit_events
+    }
 
 @app.get("/stream-analysis")
 async def stream_analysis():
@@ -415,14 +433,6 @@ def analyze_with_gemini(video_path, db: Session):
         if stream is None:
             raise Exception("No stream configuration found for team 2")
 
-        # Extract timestamp from clip filename (format: clip_YYYYMMDD_HHMMSS.mp4)
-        timestamp_str = video_path.stem.split('_', 1)[1]  # Get YYYYMMDD_HHMMSS part
-        clip_time = datetime.datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S")
-        utc_time = clip_time.strftime("%Y-%m-%d %H:%M:%S UTC")
-
-        # Append UTC timestamp to the prompt
-        enhanced_prompt = f"{stream.prompt}\n\nIMPORTANT: This video chunk was captured starting at {utc_time}. Please use this as the reference time for all timestamps in your analysis."
-
         # Send to Gemini for analysis using new API format
         response = client.models.generate_content(
             model='models/gemini-2.0-flash',
@@ -431,21 +441,12 @@ def analyze_with_gemini(video_path, db: Session):
                     types.Part(
                         inline_data=types.Blob(data=video_bytes, mime_type='video/mp4')
                     ),
-                    types.Part(text=enhanced_prompt)
+                    types.Part(text=stream.prompt)
                 ]
             )
         )
 
-        # Clean the response by removing markdown code block syntax
-        cleaned_response = response.text.strip()
-        if cleaned_response.startswith("```json"):
-            cleaned_response = cleaned_response[7:]  # Remove ```json
-        if cleaned_response.startswith("```"):
-            cleaned_response = cleaned_response[3:]  # Remove ```
-        if cleaned_response.endswith("```"):
-            cleaned_response = cleaned_response[:-3]  # Remove ```
-
-        return cleaned_response.strip()
+        return response.text
     except Exception as e:
         print(f"Error analyzing with Gemini: {e}")
         return f"Analysis failed: {str(e)}"
@@ -703,29 +704,23 @@ def bootstrap_default_stream():
             default_prompt = """
 Analyze this video of a retail environment and identify key customer events and interactions.
 For each event, provide a description and its approximate timestamp in the video.
-
-CRITICAL: You must return ONLY a valid JSON array. No other text, explanations, or formatting outside the JSON array is allowed.
-DO NOT wrap the response in markdown code blocks (no ```json or ``` markers).
-DO NOT add any text before or after the JSON array.
-The response must be parseable by JSON.parse() or json.loads() without any preprocessing.
-
-Return a JSON array of objects that follows PostHog's event schema. Each object must have the following fields:
+Return the output as a valid JSON array of objects that follows PostHog's event schema. Each object must have the following fields:
 
 - "event": String - The specific customer action (e.g., "CustomerEntered", "ProductInteraction", "CustomerExited")
+- "timestamp": "HH:MM:SS" (String format for hours, minutes, seconds)
 - "properties": Object containing:
-  - "timestamp": "HH:MM:SS" (String format for hours, minutes, seconds)
   - "distinct_id": String - A unique identifier for the customer (e.g., "customer_1", "customer_2")
   - "description": String - A concise description of what the customer did
   - "location": String - Area within the retail space
   - "duration_seconds": Number - Approximate duration of the activity in seconds
   - "interaction_type": String - Type of activity (e.g., "entry_exit", "product_engagement", "service_usage", "staff_interaction")
 
-Example of expected JSON output (this is the ONLY format allowed, with NO markdown formatting):
+  Example of expected JSON output:
 [
   {
     "event": "CustomerEntered",
+    "timestamp": "00:00:15",
     "properties": {
-      "timestamp": "00:00:15",
       "distinct_id": "customer_1",
       "description": "Customer enters through the main entrance",
       "location": "entrance",
@@ -735,28 +730,41 @@ Example of expected JSON output (this is the ONLY format allowed, with NO markdo
   },
   {
     "event": "ProductInteraction",
+    "timestamp": "00:01:20",
     "properties": {
-      "timestamp": "00:01:20",
       "distinct_id": "customer_1",
       "description": "Customer examines product on display",
       "location": "main_floor",
       "duration_seconds": 25,
       "interaction_type": "product_engagement"
     }
+  },
+  {
+    "event": "StaffInteraction",
+    "timestamp": "00:02:15",
+    "properties": {
+      "distinct_id": "customer_1",
+      "description": "Customer speaks with staff member",
+      "location": "help_desk",
+      "duration_seconds": 45,
+      "interaction_type": "staff_interaction"
+    }
+  },
+  {
+    "event": "CustomerExited",
+    "timestamp": "00:05:30",
+    "properties": {
+      "distinct_id": "customer_1",
+      "description": "Customer leaves through the main exit",
+      "location": "exit",
+      "duration_seconds": 8,
+      "interaction_type": "entry_exit"
+    }
   }
 ]
 
-IMPORTANT VALIDATION RULES:
-1. The response must be ONLY the JSON array, with no additional text before or after
-2. DO NOT use markdown code block syntax (no ```json or ``` markers)
-3. All strings must be properly quoted with double quotes
-4. All property names must be properly quoted with double quotes
-5. No trailing commas in arrays or objects
-6. No comments or explanations outside the JSON
-7. If no events are found, return an empty array: []
-8. All timestamps must be in "HH:MM:SS" format
-9. All duration_seconds must be numbers, not strings
-10. All distinct_ids must be strings
+Ensure the output is only the JSON array and nothing else.
+If no specific events are identifiable, return an empty array [].
 
 Common event types to look for:
 - CustomerEntered: When a customer enters the retail space
