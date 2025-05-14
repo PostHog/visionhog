@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  srs:
+    image: ossrs/srs:5
+    ports:
+      - "1935:1935"  # RTMP
+      - "1985:1985"  # HTTP API
+      - "8080:8080"  # HTTP FLV
+      - "8000:8000/udp"  # UDP
+      - "10080:10080/udp"  # UDP
+    volumes:
+      - ./srs:/usr/local/srs/conf
+    restart: unless-stopped
+
+  visionhog:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      - srs
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    volumes:
+      - ./video_clips:/app/video_clips
+      - ./processed_clips:/app/processed_clips
+    restart: unless-stopped
