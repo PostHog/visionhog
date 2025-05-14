@@ -34,7 +34,7 @@ from .models import StreamDB, Stream, StreamCreate, StreamChunk, StreamChunkResp
 
 # Configuration
 POSTHOG_ENV_KEY = os.getenv("POSTHOG_ENV_KEY")
-RTMP_URL = os.getenv("RTMP_URL", "http://127.0.0.1:8080/live/show.flv")  # HTTP FLV stream endpoint
+STREAM_URL = os.getenv("STREAM_URL", "http://127.0.0.1:8080/live/show.flv")  # HTTP FLV stream endpoint
 OUTPUT_DIR = Path("video_clips")
 PROCESSED_DIR = Path("processed_clips")  # For clips that have been analyzed
 MAX_CLIPS_TO_KEEP = 100  # Maximum number of clips to store
@@ -623,13 +623,13 @@ def capture_stream_chunks():
             # Use FFmpeg to capture a segment of the stream
             try:
                 # Determine stream type from URL
-                is_hls = RTMP_URL.endswith('.m3u8')
+                is_hls = STREAM_URL.endswith('.m3u8')
 
                 # Configure input based on stream type
                 if is_hls:
                     # HLS stream configuration
                     stream = ffmpeg.input(
-                        RTMP_URL,
+                        STREAM_URL,
                         t=CHUNK_DURATION,
                         f='hls',
                         re=None,
@@ -639,7 +639,7 @@ def capture_stream_chunks():
                 else:
                     # HTTP FLV stream configuration
                     stream = ffmpeg.input(
-                        RTMP_URL,
+                        STREAM_URL,
                         t=CHUNK_DURATION,
                         f='flv',
                         re=None,
@@ -832,7 +832,7 @@ def run_migrations():
         raise
 
 def main():
-    print(f"Starting to capture {CHUNK_DURATION}-second chunks from {RTMP_URL}")
+    print(f"Starting to capture {CHUNK_DURATION}-second chunks from {STREAM_URL}")
     print(f"Saving clips to {OUTPUT_DIR.absolute()}")
     print(f"Processed clips will be moved to {PROCESSED_DIR.absolute()}")
     print("Press Ctrl+C to stop capturing")

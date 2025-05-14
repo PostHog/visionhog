@@ -59,6 +59,7 @@ Copy the `.env.example` file to `.env` and configure the following variables:
 ```
 # Required
 GEMINI_API_KEY=your_gemini_api_key_here    # Google Gemini API key for video analysis
+STREAM_URL=your_stream_url_here            # URL of the video stream to analyze (default: http://127.0.0.1:8080/live/show.flv)
 
 # Optional
 POSTHOG_ENV_KEY=your_posthog_api_key_here  # PostHog API key for event tracking
@@ -97,7 +98,13 @@ The RTMP server will listen on `rtmp://localhost:1935/live` and the web interfac
 
 Using FFmpeg:
 ```bash
+# Stream to the RTMP server
 ffmpeg -i input.mp4 -c:v libx264 -c:a aac -f flv rtmp://localhost:1935/live/stream_name
+
+# Configure VisionHog to analyze the stream
+# Set STREAM_URL in your .env file to:
+# For HTTP FLV: http://localhost:8080/live/stream_name.flv
+# For HLS: http://localhost:8080/live/stream_name.m3u8
 ```
 
 Or configure your streaming software (OBS, etc.) to stream to `rtmp://localhost:1935/live/stream_name`.
