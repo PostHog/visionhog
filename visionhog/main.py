@@ -23,8 +23,14 @@ from sqlalchemy.orm import Session, selectinload, joinedload
 import posthog
 from alembic.config import Config
 from alembic import command
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 from .models import StreamDB, Stream, StreamCreate, StreamChunk, StreamChunkResponse, get_db, SessionLocal
+
+
 
 # Configuration
 POSTHOG_ENV_KEY = os.getenv("POSTHOG_ENV_KEY")
@@ -616,15 +622,30 @@ def capture_stream_chunks():
 
             # Use FFmpeg to capture a segment of the stream
             try:
-                # Configure input for HTTP FLV stream with appropriate options
-                stream = ffmpeg.input(
-                    RTMP_URL,
-                    t=CHUNK_DURATION,
-                    f='flv',
-                    re=None,
-                    timeout=5000000,  # Increase timeout
-                    headers='User-Agent: Mozilla/5.0\r\nAccept: */*\r\nConnection: keep-alive\r\n'  # Add headers
-                )
+                # Determine stream type from URL
+                is_hls = RTMP_URL.endswith('.m3u8')
+
+                # Configure input based on stream type
+                if is_hls:
+                    # HLS stream configuration
+                    stream = ffmpeg.input(
+                        RTMP_URL,
+                        t=CHUNK_DURATION,
+                        f='hls',
+                        re=None,
+                        timeout=5000000,
+                        headers='User-Agent: Mozilla/5.0\r\nAccept: */*\r\nConnection: keep-alive\r\n'
+                    )
+                else:
+                    # HTTP FLV stream configuration
+                    stream = ffmpeg.input(
+                        RTMP_URL,
+                        t=CHUNK_DURATION,
+                        f='flv',
+                        re=None,
+                        timeout=5000000,
+                        headers='User-Agent: Mozilla/5.0\r\nAccept: */*\r\nConnection: keep-alive\r\n'
+                    )
 
                 # Configure output with more specific options
                 stream = ffmpeg.output(
