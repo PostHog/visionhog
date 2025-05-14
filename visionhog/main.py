@@ -24,7 +24,7 @@ import posthog
 from alembic.config import Config
 from alembic import command
 
-from models import StreamDB, Stream, StreamCreate, StreamChunk, StreamChunkResponse, get_db, SessionLocal
+from .models import StreamDB, Stream, StreamCreate, StreamChunk, StreamChunkResponse, get_db, SessionLocal
 
 # Configuration
 POSTHOG_ENV_KEY = os.getenv("POSTHOG_ENV_KEY")
