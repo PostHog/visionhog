@@ -11,16 +11,20 @@ import asyncio
 from pathlib import Path
 from google import genai
 from google.genai import types
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 import uvicorn
 from pydantic import BaseModel
-from typing import Set, Dict
+from typing import Set, Dict, List
+from sqlalchemy.orm import Session
+
+from models import StreamDB, Stream, StreamCreate, get_db, SessionLocal
 
 # Configuration
+POSTHOG_ENV_KEY = os.getenv("POSTHOG_ENV_KEY")
 RTMP_URL = "http://localhost:8080/live/show.flv"  # HTTP FLV stream endpoint
 OUTPUT_DIR = Path("video_clips")
 PROCESSED_DIR = Path("processed_clips")  # For clips that have been analyzed
@@ -68,8 +72,12 @@ manager = ConnectionManager()
 class PromptUpdate(BaseModel):
     prompt: str
 
-# Global variable to store the prompt
-current_prompt = """
+def get_team_prompt(db: Session, team_id: str) -> str:
+    """Get the prompt for a specific team from the database"""
+    stream = db.query(StreamDB).filter(StreamDB.team == team_id).first()
+    if stream is None:
+        # Create default stream for team if it doesn't exist
+        default_prompt = """
 Analyze this video of a retail environment and identify key customer events and interactions.
 For each event, provide a description and its approximate timestamp in the video.
 Return the output as a valid JSON array of objects that follows PostHog's event schema. Each object must have the following fields:
@@ -83,7 +91,7 @@ Return the output as a valid JSON array of objects that follows PostHog's event 
   - "duration_seconds": Number - Approximate duration of the activity in seconds
   - "interaction_type": String - Type of activity (e.g., "entry_exit", "product_engagement", "service_usage", "staff_interaction")
 
-Example of expected JSON output:
+  Example of expected JSON output:
 [
   {
     "event": "CustomerEntered",
@@ -145,6 +153,11 @@ Common event types to look for:
 
 Use the same distinct_id to track the same customer throughout multiple events.
 """
+        stream = StreamDB(team=team_id, prompt=default_prompt)
+        db.add(stream)
+        db.commit()
+        db.refresh(stream)
+    return stream.prompt
 
 @app.get("/", response_class=HTMLResponse)
 async def landing_page():
@@ -240,16 +253,22 @@ async def landing_page():
     """
 
 @app.get("/prompt")
-async def get_prompt():
+async def get_prompt(db: Session = Depends(get_db)):
     """Get the current prompt used for video analysis"""
-    return {"prompt": current_prompt}
+    return {"prompt": get_team_prompt(db, "2")}
 
 @app.post("/prompt")
-async def update_prompt(prompt_update: PromptUpdate):
+async def update_prompt(prompt_update: PromptUpdate, db: Session = Depends(get_db)):
     """Update the prompt used for video analysis"""
-    global current_prompt
-    current_prompt = prompt_update.prompt
-    return {"message": "Prompt updated successfully", "prompt": current_prompt}
+    stream = db.query(StreamDB).filter(StreamDB.team == "2").first()
+    if stream is None:
+        stream = StreamDB(team="2", prompt=prompt_update.prompt)
+        db.add(stream)
+    else:
+        stream.prompt = prompt_update.prompt
+    db.commit()
+    db.refresh(stream)
+    return {"message": "Prompt updated successfully", "prompt": stream.prompt}
 
 @app.get("/stream-analysis")
 async def stream_analysis():
@@ -270,6 +289,53 @@ async def stream_analysis():
 
     return EventSourceResponse(event_generator())
 
+@app.get("/streams", response_model=List[Stream])
+async def get_streams(db: Session = Depends(get_db)):
+    """Get all streams"""
+    return db.query(StreamDB).all()
+
+@app.post("/streams", response_model=Stream)
+async def create_stream(stream: StreamCreate, db: Session = Depends(get_db)):
+    """Create a new stream"""
+    db_stream = StreamDB(**stream.model_dump())
+    db.add(db_stream)
+    db.commit()
+    db.refresh(db_stream)
+    return db_stream
+
+@app.get("/streams/{stream_id}", response_model=Stream)
+async def get_stream(stream_id: int, db: Session = Depends(get_db)):
+    """Get a specific stream by ID"""
+    stream = db.query(StreamDB).filter(StreamDB.id == stream_id).first()
+    if stream is None:
+        raise HTTPException(status_code=404, detail="Stream not found")
+    return stream
+
+@app.put("/streams/{stream_id}", response_model=Stream)
+async def update_stream(stream_id: int, stream: StreamCreate, db: Session = Depends(get_db)):
+    """Update a stream"""
+    db_stream = db.query(StreamDB).filter(StreamDB.id == stream_id).first()
+    if db_stream is None:
+        raise HTTPException(status_code=404, detail="Stream not found")
+
+    for key, value in stream.model_dump().items():
+        setattr(db_stream, key, value)
+
+    db.commit()
+    db.refresh(db_stream)
+    return db_stream
+
+@app.delete("/streams/{stream_id}")
+async def delete_stream(stream_id: int, db: Session = Depends(get_db)):
+    """Delete a stream"""
+    db_stream = db.query(StreamDB).filter(StreamDB.id == stream_id).first()
+    if db_stream is None:
+        raise HTTPException(status_code=404, detail="Stream not found")
+
+    db.delete(db_stream)
+    db.commit()
+    return {"message": "Stream deleted successfully"}
+
 # Ensure directories exist
 OUTPUT_DIR.mkdir(exist_ok=True)
 PROCESSED_DIR.mkdir(exist_ok=True)
@@ -285,12 +351,15 @@ clip_queue = queue.Queue()
 # Create a flag for signaling threads to exit
 exit_flag = threading.Event()
 
-def analyze_with_gemini(video_path):
+def analyze_with_gemini(video_path, db: Session):
     """Send video to Gemini for analysis and return results"""
     try:
         # Read the video as bytes
         with open(video_path, 'rb') as f:
             video_bytes = f.read()
+
+        # Get the prompt for team 2
+        prompt = get_team_prompt(db, "2")
 
         # Send to Gemini for analysis using new API format
         response = client.models.generate_content(
@@ -300,7 +369,7 @@ def analyze_with_gemini(video_path):
                     types.Part(
                         inline_data=types.Blob(data=video_bytes, mime_type='video/mp4')
                     ),
-                    types.Part(text=current_prompt)
+                    types.Part(text=prompt)
                 ]
             )
         )
@@ -324,55 +393,61 @@ def process_clip_worker():
 
             print(f"Processing clip: {clip_path}")
 
-            # Analyze with Gemini
-            start_time = time.time()
-            analysis = analyze_with_gemini(clip_path)
-            processing_time = time.time() - start_time
-
-            # Create analysis result object
-            analysis_result = {
-                "clip_name": clip_path.name,
-                "processed_at": datetime.datetime.now().isoformat(),
-                "processing_time": processing_time,
-                "analysis": analysis
-            }
-
-            # Broadcast analysis result to SSE clients
-            asyncio.run(manager.broadcast(json.dumps(analysis_result)))
-
-            # Save results
-            results_path = clip_path.with_suffix('.txt')
-            with open(results_path, 'w') as f:
-                f.write(f"Analysis of {clip_path.name}:\n")
-                f.write(f"Processed at: {datetime.datetime.now().isoformat()}\n")
-                f.write(f"Processing time: {processing_time:.2f} seconds\n\n")
-                f.write(analysis)
-
-            print(f"Analysis saved to {results_path}")
-
-            # Move to processed directory
-            dest_path = PROCESSED_DIR / clip_path.name
-            shutil.move(str(clip_path), str(dest_path))
-
-            # Also move the analysis file
-            if results_path.exists():
-                shutil.move(str(results_path), str(PROCESSED_DIR / results_path.name))
-
-            # Upload to S3
+            # Create a new database session for this thread
+            db = SessionLocal()
             try:
-                # Upload video file
-                s3_video_key = f"{S3_PREFIX}/{clip_path.name}"
-                s3_client.upload_file(str(dest_path), S3_BUCKET, s3_video_key)
-                print(f"Uploaded video to s3://{S3_BUCKET}/{s3_video_key}")
+                # Analyze with Gemini
+                start_time = time.time()
+                analysis = analyze_with_gemini(clip_path, db)
+                processing_time = time.time() - start_time
 
-                # Upload analysis file
-                s3_analysis_key = f"{S3_PREFIX}/{results_path.name}"
-                s3_client.upload_file(str(PROCESSED_DIR / results_path.name), S3_BUCKET, s3_analysis_key)
-                print(f"Uploaded analysis to s3://{S3_BUCKET}/{s3_analysis_key}")
-            except Exception as e:
-                print(f"Error uploading to S3: {e}")
+                # Create analysis result object
+                analysis_result = {
+                    "clip_name": clip_path.name,
+                    "processed_at": datetime.datetime.now().isoformat(),
+                    "processing_time": processing_time,
+                    "analysis": analysis
+                }
 
-            clip_queue.task_done()
+                # Broadcast analysis result to SSE clients
+                asyncio.run(manager.broadcast(json.dumps(analysis_result)))
+
+                # Save results
+                results_path = clip_path.with_suffix('.txt')
+                with open(results_path, 'w') as f:
+                    f.write(f"Analysis of {clip_path.name}:\n")
+                    f.write(f"Processed at: {datetime.datetime.now().isoformat()}\n")
+                    f.write(f"Processing time: {processing_time:.2f} seconds\n\n")
+                    f.write(analysis)
+
+                print(f"Analysis saved to {results_path}")
+
+                # Move to processed directory
+                dest_path = PROCESSED_DIR / clip_path.name
+                shutil.move(str(clip_path), str(dest_path))
+
+                # Also move the analysis file
+                if results_path.exists():
+                    shutil.move(str(results_path), str(PROCESSED_DIR / results_path.name))
+
+                # Upload to S3
+                try:
+                    # Upload video file
+                    s3_video_key = f"{S3_PREFIX}/{clip_path.name}"
+                    s3_client.upload_file(str(dest_path), S3_BUCKET, s3_video_key)
+                    print(f"Uploaded video to s3://{S3_BUCKET}/{s3_video_key}")
+
+                    # Upload analysis file
+                    s3_analysis_key = f"{S3_PREFIX}/{results_path.name}"
+                    s3_client.upload_file(str(PROCESSED_DIR / results_path.name), S3_BUCKET, s3_analysis_key)
+                    print(f"Uploaded analysis to s3://{S3_BUCKET}/{s3_analysis_key}")
+                except Exception as e:
+                    print(f"Error uploading to S3: {e}")
+
+                clip_queue.task_done()
+            finally:
+                # Always close the database session
+                db.close()
 
         except Exception as e:
             print(f"Error in processing worker: {e}")
