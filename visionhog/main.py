@@ -28,7 +28,7 @@ from .models import StreamDB, Stream, StreamCreate, StreamChunk, StreamChunkResp
 
 # Configuration
 POSTHOG_ENV_KEY = os.getenv("POSTHOG_ENV_KEY")
-RTMP_URL = "http://127.0.0.1:8080/live/show.flv"  # HTTP FLV stream endpoint
+RTMP_URL = os.getenv("RTMP_URL", "http://127.0.0.1:8080/live/show.flv")  # HTTP FLV stream endpoint
 OUTPUT_DIR = Path("video_clips")
 PROCESSED_DIR = Path("processed_clips")  # For clips that have been analyzed
 MAX_CLIPS_TO_KEEP = 100  # Maximum number of clips to store
