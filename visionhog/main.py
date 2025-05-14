@@ -238,6 +238,17 @@ def main():
         if 'processing_thread' in locals():
             processing_thread.join(timeout=10)
 
+        # Clear out video_clips directory during shutdown
+        print("Cleaning up video_clips directory...")
+        for file in OUTPUT_DIR.glob("*"):
+            try:
+                if file.is_file():
+                    file.unlink()
+                elif file.is_dir():
+                    shutil.rmtree(file)
+            except Exception as e:
+                print(f"Error removing {file}: {e}")
+
         print("Program terminated")
 
 if __name__ == "__main__":
