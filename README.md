@@ -27,6 +27,31 @@ cp .env.example .env
 # Edit the .env file with your actual API keys and configuration
 ```
 
+## Docker Compose
+
+The application can be run using Docker Compose, which includes both the RTMP server (SRS) and the VisionHog application:
+
+```bash
+# Create a .env file from the example
+cp .env.example .env
+# Edit the .env file with your actual API keys and configuration
+
+# Start the services
+docker compose up -d
+
+# View logs
+docker compose logs -f
+
+# Stop the services
+docker compose down
+```
+
+The Docker Compose setup includes:
+- SRS RTMP server (ports 1935, 1985, 8080, 8000, 10080)
+- VisionHog application with video analysis
+- Persistent storage for video clips and processed clips
+- Automatic container restart on failure
+
 ## Environment Variables
 
 Copy the `.env.example` file to `.env` and configure the following variables:
