@@ -59,3 +59,7 @@ coverage.xml
 sam_vit_b_01ec64.pth
 processed_clips/
 video_clips/
+
+*.db
+*.db-shm
+*.db-wal
