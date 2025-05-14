@@ -17,6 +17,7 @@ dependencies = [
     "ffmpeg-python>=0.2.0",    # For HLS conversion
     "google-genai>=1.15.0",    # For Gemini API
     "python-dotenv>=1.1.0",
+    "boto3>=1.34.0",           # For S3 uploads
 ]
 
 [build-system]

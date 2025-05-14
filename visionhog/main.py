@@ -5,6 +5,7 @@ import datetime
 import threading
 import queue
 import shutil
+import boto3
 from pathlib import Path
 from google import genai
 from google.genai import types
@@ -16,6 +17,85 @@ PROCESSED_DIR = Path("processed_clips")  # For clips that have been analyzed
 MAX_CLIPS_TO_KEEP = 100  # Maximum number of clips to store
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 CHUNK_DURATION = 10  # Duration of each clip in seconds
+S3_BUCKET = "posthog-vision"
+S3_PREFIX = "teams/2"
+
+PROMPT = """
+Analyze this video of a retail environment and identify key customer events and interactions.
+For each event, provide a description and its approximate timestamp in the video.
+Return the output as a valid JSON array of objects that follows PostHog's event schema. Each object must have the following fields:
+
+- "event": String - The specific customer action (e.g., "CustomerEntered", "ProductInteraction", "CustomerExited")
+- "properties": Object containing:
+  - "timestamp": "HH:MM:SS" (String format for hours, minutes, seconds)
+  - "distinct_id": String - A unique identifier for the customer (e.g., "customer_1", "customer_2")
+  - "description": String - A concise description of what the customer did
+  - "location": String - Area within the retail space
+  - "duration_seconds": Number - Approximate duration of the activity in seconds
+  - "interaction_type": String - Type of activity (e.g., "entry_exit", "product_engagement", "service_usage", "staff_interaction")
+
+Example of expected JSON output:
+[
+  {
+    "event": "CustomerEntered",
+    "properties": {
+      "timestamp": "00:00:15",
+      "distinct_id": "customer_1",
+      "description": "Customer enters through the main entrance",
+      "location": "entrance",
+      "duration_seconds": 5,
+      "interaction_type": "entry_exit"
+    }
+  },
+  {
+    "event": "ProductInteraction",
+    "properties": {
+      "timestamp": "00:01:20",
+      "distinct_id": "customer_1",
+      "description": "Customer examines product on display",
+      "location": "main_floor",
+      "duration_seconds": 25,
+      "interaction_type": "product_engagement"
+    }
+  },
+  {
+    "event": "StaffInteraction",
+    "properties": {
+      "timestamp": "00:02:15",
+      "distinct_id": "customer_1",
+      "description": "Customer speaks with staff member",
+      "location": "help_desk",
+      "duration_seconds": 45,
+      "interaction_type": "staff_interaction"
+    }
+  },
+  {
+    "event": "CustomerExited",
+    "properties": {
+      "timestamp": "00:05:30",
+      "distinct_id": "customer_1",
+      "description": "Customer leaves through the main exit",
+      "location": "exit",
+      "duration_seconds": 8,
+      "interaction_type": "entry_exit"
+    }
+  }
+]
+
+Ensure the output is only the JSON array and nothing else.
+If no specific events are identifiable, return an empty array [].
+
+Common event types to look for:
+- CustomerEntered: When a customer enters the retail space
+- BrowsingBehavior: When a customer is looking around without specific engagement
+- ProductInteraction: When a customer engages with products or displays
+- ServiceUsage: When a customer uses a service offered in the space
+- StaffInteraction: When a customer interacts with staff
+- PurchaseActivity: When a customer makes or attempts a purchase
+- CustomerExited: When a customer leaves the retail space
+
+Use the same distinct_id to track the same customer throughout multiple events.
+"""
 
 # Ensure directories exist
 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -23,6 +103,9 @@ PROCESSED_DIR.mkdir(exist_ok=True)
 
 # Set up Gemini
 client = genai.Client(api_key=GEMINI_API_KEY)
+
+# Set up S3 client
+s3_client = boto3.client('s3')
 
 # Create a queue for processing clips
 clip_queue = queue.Queue()
@@ -44,7 +127,7 @@ def analyze_with_gemini(video_path):
                     types.Part(
                         inline_data=types.Blob(data=video_bytes, mime_type='video/mp4')
                     ),
-                    types.Part(text='Analyze this video clip and describe what\'s happening.')
+                    types.Part(text=PROMPT)
                 ]
             )
         )
@@ -90,6 +173,20 @@ def process_clip_worker():
             # Also move the analysis file
             if results_path.exists():
                 shutil.move(str(results_path), str(PROCESSED_DIR / results_path.name))
+
+            # Upload to S3
+            try:
+                # Upload video file
+                s3_video_key = f"{S3_PREFIX}/{clip_path.name}"
+                s3_client.upload_file(str(dest_path), S3_BUCKET, s3_video_key)
+                print(f"Uploaded video to s3://{S3_BUCKET}/{s3_video_key}")
+
+                # Upload analysis file
+                s3_analysis_key = f"{S3_PREFIX}/{results_path.name}"
+                s3_client.upload_file(str(PROCESSED_DIR / results_path.name), S3_BUCKET, s3_analysis_key)
+                print(f"Uploaded analysis to s3://{S3_BUCKET}/{s3_analysis_key}")
+            except Exception as e:
+                print(f"Error uploading to S3: {e}")
 
             clip_queue.task_done()
 
