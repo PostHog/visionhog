@@ -11,24 +11,24 @@ import asyncio
 from pathlib import Path
 from google import genai
 from google.genai import types
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 import uvicorn
 from pydantic import BaseModel
-from typing import Set, Dict, List
-from sqlalchemy.orm import Session
+from typing import Set, Dict, List, Optional
+from sqlalchemy.orm import Session, selectinload, joinedload
 import posthog
 from alembic.config import Config
 from alembic import command
 
-from models import StreamDB, Stream, StreamCreate, get_db, SessionLocal
+from models import StreamDB, Stream, StreamCreate, StreamChunk, StreamChunkResponse, get_db, SessionLocal
 
 # Configuration
 POSTHOG_ENV_KEY = os.getenv("POSTHOG_ENV_KEY")
-RTMP_URL = "http://localhost:8080/live/show.flv"  # HTTP FLV stream endpoint
+RTMP_URL = "http://127.0.0.1:8080/live/show.flv"  # HTTP FLV stream endpoint
 OUTPUT_DIR = Path("video_clips")
 PROCESSED_DIR = Path("processed_clips")  # For clips that have been analyzed
 MAX_CLIPS_TO_KEEP = 100  # Maximum number of clips to store
@@ -87,7 +87,13 @@ def get_team_prompt(db: Session, team_id: str) -> str:
         default_prompt = """
 Analyze this video of a retail environment and identify key customer events and interactions.
 For each event, provide a description and its approximate timestamp in the video.
-Return the output as a valid JSON array of objects that follows PostHog's event schema. Each object must have the following fields:
+
+CRITICAL: You must return ONLY a valid JSON array. No other text, explanations, or formatting outside the JSON array is allowed.
+DO NOT wrap the response in markdown code blocks (no ```json or ``` markers).
+DO NOT add any text before or after the JSON array.
+The response must be parseable by JSON.parse() or json.loads() without any preprocessing.
+
+Return a JSON array of objects that follows PostHog's event schema. Each object must have the following fields:
 
 - "event": String - The specific customer action (e.g., "CustomerEntered", "ProductInteraction", "CustomerExited")
 - "properties": Object containing:
@@ -98,7 +104,7 @@ Return the output as a valid JSON array of objects that follows PostHog's event 
   - "duration_seconds": Number - Approximate duration of the activity in seconds
   - "interaction_type": String - Type of activity (e.g., "entry_exit", "product_engagement", "service_usage", "staff_interaction")
 
-  Example of expected JSON output:
+Example of expected JSON output (this is the ONLY format allowed, with NO markdown formatting):
 [
   {
     "event": "CustomerEntered",
@@ -121,33 +127,20 @@ Return the output as a valid JSON array of objects that follows PostHog's event 
       "duration_seconds": 25,
       "interaction_type": "product_engagement"
     }
-  },
-  {
-    "event": "StaffInteraction",
-    "properties": {
-      "timestamp": "00:02:15",
-      "distinct_id": "customer_1",
-      "description": "Customer speaks with staff member",
-      "location": "help_desk",
-      "duration_seconds": 45,
-      "interaction_type": "staff_interaction"
-    }
-  },
-  {
-    "event": "CustomerExited",
-    "properties": {
-      "timestamp": "00:05:30",
-      "distinct_id": "customer_1",
-      "description": "Customer leaves through the main exit",
-      "location": "exit",
-      "duration_seconds": 8,
-      "interaction_type": "entry_exit"
-    }
   }
 ]
 
-Ensure the output is only the JSON array and nothing else.
-If no specific events are identifiable, return an empty array [].
+IMPORTANT VALIDATION RULES:
+1. The response must be ONLY the JSON array, with no additional text before or after
+2. DO NOT use markdown code block syntax (no ```json or ``` markers)
+3. All strings must be properly quoted with double quotes
+4. All property names must be properly quoted with double quotes
+5. No trailing commas in arrays or objects
+6. No comments or explanations outside the JSON
+7. If no events are found, return an empty array: []
+8. All timestamps must be in "HH:MM:SS" format
+9. All duration_seconds must be numbers, not strings
+10. All distinct_ids must be strings
 
 Common event types to look for:
 - CustomerEntered: When a customer enters the retail space
@@ -318,6 +311,58 @@ async def get_stream(stream_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Stream not found")
     return stream
 
+@app.get("/teams/{team_id}/chunks", response_model=List[StreamChunkResponse])
+async def list_team_chunks(
+    team_id: str,
+    limit: Optional[int] = Query(100, ge=1, le=1000),
+    offset: Optional[int] = Query(0, ge=0),
+    db: Session = Depends(get_db)
+):
+    """
+    List chunks for a specific team, ordered by processed_at time (newest first).
+
+    Parameters:
+    - team_id: The team identifier
+    - limit: Maximum number of chunks to return (default: 100, max: 1000)
+    - offset: Number of chunks to skip (for pagination)
+    """
+    chunks = (
+        db.query(StreamChunk)
+        .options(joinedload(StreamChunk.stream).load_only(StreamDB.id))
+        .filter(StreamChunk.team_id == team_id)
+        .order_by(StreamChunk.processed_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+    # Enhance chunks with additional information
+    enhanced_chunks = []
+    for chunk in chunks:
+        # Generate S3 URLs
+        s3_video_url = f"https://{S3_BUCKET}.s3.amazonaws.com/{chunk.s3_video_key}"
+        s3_analysis_url = f"https://{S3_BUCKET}.s3.amazonaws.com/{chunk.s3_analysis_key}" if chunk.s3_analysis_key else None
+
+        # Create enhanced chunk response
+        enhanced_chunk = StreamChunkResponse(
+            id=chunk.id,
+            stream_id=chunk.stream_id,
+            team_id=chunk.team_id,
+            s3_video_key=chunk.s3_video_key,
+            s3_analysis_key=chunk.s3_analysis_key,
+            clip_name=chunk.clip_name,
+            processed_at=chunk.processed_at,
+            processing_time=chunk.processing_time,
+            created_at=chunk.created_at,
+            stream=chunk.stream,  # Include the full stream information
+            s3_video_url=s3_video_url,
+            s3_analysis_url=s3_analysis_url,
+            analysis_text=chunk.analysis_json  # Use the analysis_json from the database
+        )
+        enhanced_chunks.append(enhanced_chunk)
+
+    return enhanced_chunks
+
 @app.put("/streams/{stream_id}", response_model=Stream)
 async def update_stream(stream_id: int, stream: StreamCreate, db: Session = Depends(get_db)):
     """Update a stream"""
@@ -370,6 +415,14 @@ def analyze_with_gemini(video_path, db: Session):
         if stream is None:
             raise Exception("No stream configuration found for team 2")
 
+        # Extract timestamp from clip filename (format: clip_YYYYMMDD_HHMMSS.mp4)
+        timestamp_str = video_path.stem.split('_', 1)[1]  # Get YYYYMMDD_HHMMSS part
+        clip_time = datetime.datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S")
+        utc_time = clip_time.strftime("%Y-%m-%d %H:%M:%S UTC")
+
+        # Append UTC timestamp to the prompt
+        enhanced_prompt = f"{stream.prompt}\n\nIMPORTANT: This video chunk was captured starting at {utc_time}. Please use this as the reference time for all timestamps in your analysis."
+
         # Send to Gemini for analysis using new API format
         response = client.models.generate_content(
             model='models/gemini-2.0-flash',
@@ -378,12 +431,21 @@ def analyze_with_gemini(video_path, db: Session):
                     types.Part(
                         inline_data=types.Blob(data=video_bytes, mime_type='video/mp4')
                     ),
-                    types.Part(text=stream.prompt)
+                    types.Part(text=enhanced_prompt)
                 ]
             )
         )
 
-        return response.text
+        # Clean the response by removing markdown code block syntax
+        cleaned_response = response.text.strip()
+        if cleaned_response.startswith("```json"):
+            cleaned_response = cleaned_response[7:]  # Remove ```json
+        if cleaned_response.startswith("```"):
+            cleaned_response = cleaned_response[3:]  # Remove ```
+        if cleaned_response.endswith("```"):
+            cleaned_response = cleaned_response[:-3]  # Remove ```
+
+        return cleaned_response.strip()
     except Exception as e:
         print(f"Error analyzing with Gemini: {e}")
         return f"Analysis failed: {str(e)}"
@@ -474,7 +536,7 @@ def process_clip_worker():
                 if results_path.exists():
                     shutil.move(str(results_path), str(PROCESSED_DIR / results_path.name))
 
-                # Upload to S3
+                # Upload to S3 and create database record
                 try:
                     # Upload video file
                     s3_video_key = f"{S3_PREFIX}/{clip_path.name}"
@@ -485,8 +547,25 @@ def process_clip_worker():
                     s3_analysis_key = f"{S3_PREFIX}/{results_path.name}"
                     s3_client.upload_file(str(PROCESSED_DIR / results_path.name), S3_BUCKET, s3_analysis_key)
                     print(f"Uploaded analysis to s3://{S3_BUCKET}/{s3_analysis_key}")
+
+                    # Create stream chunk record
+                    stream_chunk = StreamChunk(
+                        stream_id=stream.id,
+                        team_id=stream.team,
+                        s3_video_key=s3_video_key,
+                        s3_analysis_key=s3_analysis_key,
+                        clip_name=clip_path.name,
+                        processed_at=datetime.datetime.now(),
+                        processing_time=processing_time,
+                        analysis_json=analysis  # Save the analysis JSON
+                    )
+                    db.add(stream_chunk)
+                    db.commit()
+                    print(f"Created stream chunk record with ID: {stream_chunk.id}")
+
                 except Exception as e:
-                    print(f"Error uploading to S3: {e}")
+                    print(f"Error uploading to S3 or creating database record: {e}")
+                    db.rollback()
 
                 clip_queue.task_done()
             finally:
@@ -624,7 +703,13 @@ def bootstrap_default_stream():
             default_prompt = """
 Analyze this video of a retail environment and identify key customer events and interactions.
 For each event, provide a description and its approximate timestamp in the video.
-Return the output as a valid JSON array of objects that follows PostHog's event schema. Each object must have the following fields:
+
+CRITICAL: You must return ONLY a valid JSON array. No other text, explanations, or formatting outside the JSON array is allowed.
+DO NOT wrap the response in markdown code blocks (no ```json or ``` markers).
+DO NOT add any text before or after the JSON array.
+The response must be parseable by JSON.parse() or json.loads() without any preprocessing.
+
+Return a JSON array of objects that follows PostHog's event schema. Each object must have the following fields:
 
 - "event": String - The specific customer action (e.g., "CustomerEntered", "ProductInteraction", "CustomerExited")
 - "properties": Object containing:
@@ -635,7 +720,7 @@ Return the output as a valid JSON array of objects that follows PostHog's event 
   - "duration_seconds": Number - Approximate duration of the activity in seconds
   - "interaction_type": String - Type of activity (e.g., "entry_exit", "product_engagement", "service_usage", "staff_interaction")
 
-  Example of expected JSON output:
+Example of expected JSON output (this is the ONLY format allowed, with NO markdown formatting):
 [
   {
     "event": "CustomerEntered",
@@ -658,33 +743,20 @@ Return the output as a valid JSON array of objects that follows PostHog's event 
       "duration_seconds": 25,
       "interaction_type": "product_engagement"
     }
-  },
-  {
-    "event": "StaffInteraction",
-    "properties": {
-      "timestamp": "00:02:15",
-      "distinct_id": "customer_1",
-      "description": "Customer speaks with staff member",
-      "location": "help_desk",
-      "duration_seconds": 45,
-      "interaction_type": "staff_interaction"
-    }
-  },
-  {
-    "event": "CustomerExited",
-    "properties": {
-      "timestamp": "00:05:30",
-      "distinct_id": "customer_1",
-      "description": "Customer leaves through the main exit",
-      "location": "exit",
-      "duration_seconds": 8,
-      "interaction_type": "entry_exit"
-    }
   }
 ]
 
-Ensure the output is only the JSON array and nothing else.
-If no specific events are identifiable, return an empty array [].
+IMPORTANT VALIDATION RULES:
+1. The response must be ONLY the JSON array, with no additional text before or after
+2. DO NOT use markdown code block syntax (no ```json or ``` markers)
+3. All strings must be properly quoted with double quotes
+4. All property names must be properly quoted with double quotes
+5. No trailing commas in arrays or objects
+6. No comments or explanations outside the JSON
+7. If no events are found, return an empty array: []
+8. All timestamps must be in "HH:MM:SS" format
+9. All duration_seconds must be numbers, not strings
+10. All distinct_ids must be strings
 
 Common event types to look for:
 - CustomerEntered: When a customer enters the retail space
