@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, create_engine
+from sqlalchemy import Column, Integer, String, create_engine, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from pydantic import BaseModel
@@ -17,11 +17,13 @@ class StreamDB(Base):
     id = Column(Integer, primary_key=True, index=True)
     prompt = Column(String)
     team = Column(String)
+    emit_events = Column(Boolean, default=False)
 
 # Pydantic Models
 class StreamBase(BaseModel):
     prompt: str
     team: str
+    emit_events: bool = False
 
 class StreamCreate(StreamBase):
     pass

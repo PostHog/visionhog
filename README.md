@@ -7,6 +7,8 @@ A Python application that serves as an RTMP server for video streaming with a Fa
 - RTMP server for receiving video streams
 - FastAPI web interface to list all active streams
 - View any stream in the browser
+- Automatic database migrations using Alembic
+- PostHog event tracking integration
 
 ## Installation
 
@@ -17,6 +19,19 @@ cd visionhog
 
 # Install dependencies with UV
 uv pip install -e .
+```
+
+## Database Setup
+
+The application uses SQLite with Alembic for database migrations. Migrations are automatically run when the application starts. If you need to run migrations manually:
+
+```bash
+# Run migrations manually
+cd visionhog
+alembic upgrade head
+
+# Create a new migration
+alembic revision --autogenerate -m "description of changes"
 ```
 
 ## Usage

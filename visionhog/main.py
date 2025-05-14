@@ -20,6 +20,9 @@ import uvicorn
 from pydantic import BaseModel
 from typing import Set, Dict, List
 from sqlalchemy.orm import Session
+import posthog
+from alembic.config import Config
+from alembic import command
 
 from models import StreamDB, Stream, StreamCreate, get_db, SessionLocal
 
@@ -33,6 +36,10 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 CHUNK_DURATION = 10  # Duration of each clip in seconds
 S3_BUCKET = "posthog-vision"
 S3_PREFIX = "teams/2"
+
+# Initialize PostHog client
+posthog.api_key = POSTHOG_ENV_KEY
+posthog.host = "https://app.posthog.com"  # Update this if using self-hosted PostHog
 
 # Create FastAPI app
 app = FastAPI(title="VisionHog API")
@@ -358,8 +365,10 @@ def analyze_with_gemini(video_path, db: Session):
         with open(video_path, 'rb') as f:
             video_bytes = f.read()
 
-        # Get the prompt for team 2
-        prompt = get_team_prompt(db, "2")
+        # Get the stream configuration for team 2
+        stream = db.query(StreamDB).filter(StreamDB.team == "2").first()
+        if stream is None:
+            raise Exception("No stream configuration found for team 2")
 
         # Send to Gemini for analysis using new API format
         response = client.models.generate_content(
@@ -369,7 +378,7 @@ def analyze_with_gemini(video_path, db: Session):
                     types.Part(
                         inline_data=types.Blob(data=video_bytes, mime_type='video/mp4')
                     ),
-                    types.Part(text=prompt)
+                    types.Part(text=stream.prompt)
                 ]
             )
         )
@@ -396,6 +405,12 @@ def process_clip_worker():
             # Create a new database session for this thread
             db = SessionLocal()
             try:
+                # Get stream configuration
+                stream = db.query(StreamDB).filter(StreamDB.team == "2").first()
+                if stream is None:
+                    print("No stream configuration found for team 2")
+                    continue
+
                 # Analyze with Gemini
                 start_time = time.time()
                 analysis = analyze_with_gemini(clip_path, db)
@@ -421,6 +436,35 @@ def process_clip_worker():
                     f.write(analysis)
 
                 print(f"Analysis saved to {results_path}")
+
+                # If emit_events is enabled, send events to PostHog
+                if stream.emit_events:
+                    try:
+                        # Parse the analysis result as JSON
+                        events = json.loads(analysis)
+
+                        # Send each event to PostHog
+                        for event in events:
+                            # Add additional properties
+                            event['properties'].update({
+                                'team_id': stream.team,
+                                'video_clip': clip_path.name,
+                                'processed_at': datetime.datetime.now().isoformat(),
+                                'processing_time': processing_time
+                            })
+
+                            # Send to PostHog
+                            posthog.capture(
+                                distinct_id=event['properties']['distinct_id'],
+                                event=event['event'],
+                                properties=event['properties']
+                            )
+
+                        print(f"Successfully emitted {len(events)} events to PostHog")
+                    except json.JSONDecodeError as e:
+                        print(f"Failed to parse analysis result as JSON: {e}")
+                    except Exception as e:
+                        print(f"Error emitting events to PostHog: {e}")
 
                 # Move to processed directory
                 dest_path = PROCESSED_DIR / clip_path.name
@@ -569,6 +613,123 @@ def capture_stream_chunks():
         # Wait for queue to be processed
         clip_queue.join()
 
+def bootstrap_default_stream():
+    """Ensure default stream configuration exists for team 2"""
+    db = SessionLocal()
+    try:
+        # Check if default stream exists
+        stream = db.query(StreamDB).filter(StreamDB.team == "2").first()
+        if stream is None:
+            print("Creating default stream configuration for team 2...")
+            default_prompt = """
+Analyze this video of a retail environment and identify key customer events and interactions.
+For each event, provide a description and its approximate timestamp in the video.
+Return the output as a valid JSON array of objects that follows PostHog's event schema. Each object must have the following fields:
+
+- "event": String - The specific customer action (e.g., "CustomerEntered", "ProductInteraction", "CustomerExited")
+- "properties": Object containing:
+  - "timestamp": "HH:MM:SS" (String format for hours, minutes, seconds)
+  - "distinct_id": String - A unique identifier for the customer (e.g., "customer_1", "customer_2")
+  - "description": String - A concise description of what the customer did
+  - "location": String - Area within the retail space
+  - "duration_seconds": Number - Approximate duration of the activity in seconds
+  - "interaction_type": String - Type of activity (e.g., "entry_exit", "product_engagement", "service_usage", "staff_interaction")
+
+  Example of expected JSON output:
+[
+  {
+    "event": "CustomerEntered",
+    "properties": {
+      "timestamp": "00:00:15",
+      "distinct_id": "customer_1",
+      "description": "Customer enters through the main entrance",
+      "location": "entrance",
+      "duration_seconds": 5,
+      "interaction_type": "entry_exit"
+    }
+  },
+  {
+    "event": "ProductInteraction",
+    "properties": {
+      "timestamp": "00:01:20",
+      "distinct_id": "customer_1",
+      "description": "Customer examines product on display",
+      "location": "main_floor",
+      "duration_seconds": 25,
+      "interaction_type": "product_engagement"
+    }
+  },
+  {
+    "event": "StaffInteraction",
+    "properties": {
+      "timestamp": "00:02:15",
+      "distinct_id": "customer_1",
+      "description": "Customer speaks with staff member",
+      "location": "help_desk",
+      "duration_seconds": 45,
+      "interaction_type": "staff_interaction"
+    }
+  },
+  {
+    "event": "CustomerExited",
+    "properties": {
+      "timestamp": "00:05:30",
+      "distinct_id": "customer_1",
+      "description": "Customer leaves through the main exit",
+      "location": "exit",
+      "duration_seconds": 8,
+      "interaction_type": "entry_exit"
+    }
+  }
+]
+
+Ensure the output is only the JSON array and nothing else.
+If no specific events are identifiable, return an empty array [].
+
+Common event types to look for:
+- CustomerEntered: When a customer enters the retail space
+- BrowsingBehavior: When a customer is looking around without specific engagement
+- ProductInteraction: When a customer engages with products or displays
+- ServiceUsage: When a customer uses a service offered in the space
+- StaffInteraction: When a customer interacts with staff
+- PurchaseActivity: When a customer makes or attempts a purchase
+- CustomerExited: When a customer leaves the retail space
+
+Use the same distinct_id to track the same customer throughout multiple events.
+"""
+            # Create default stream
+            default_stream = StreamDB(
+                team="2",
+                prompt=default_prompt,
+                emit_events=False
+            )
+            db.add(default_stream)
+            db.commit()
+            print("Default stream configuration created successfully")
+        else:
+            print("Default stream configuration already exists")
+    except Exception as e:
+        print(f"Error during bootstrap: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
+def run_migrations():
+    """Run database migrations"""
+    try:
+        # Get the path to the migrations directory (one level up from the main.py file)
+        migrations_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "migrations")
+
+        # Create Alembic configuration
+        alembic_cfg = Config(os.path.join(os.path.dirname(os.path.dirname(__file__)), "alembic.ini"))
+
+        # Run the migration
+        command.upgrade(alembic_cfg, "head")
+        print("Database migrations completed successfully")
+    except Exception as e:
+        print(f"Error running migrations: {e}")
+        raise
+
 def main():
     print(f"Starting to capture {CHUNK_DURATION}-second chunks from {RTMP_URL}")
     print(f"Saving clips to {OUTPUT_DIR.absolute()}")
@@ -576,6 +737,12 @@ def main():
     print("Press Ctrl+C to stop capturing")
 
     try:
+        # Run database migrations
+        run_migrations()
+
+        # Bootstrap default stream configuration
+        bootstrap_default_stream()
+
         # Start processing thread
         processing_thread = threading.Thread(target=process_clip_worker)
         processing_thread.daemon = True
