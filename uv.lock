@@ -673,6 +673,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.24.3" },
     { name = "opencv-python", specifier = ">=4.8.0.74" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
+    { name = "python-dotenv", specifier = ">=1.1.0" },
     { name = "python-multipart", specifier = ">=0.0.6" },
     { name = "uvicorn", specifier = ">=0.23.2" },
     { name = "websockets", specifier = ">=11.0.3" },
