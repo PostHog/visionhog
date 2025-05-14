@@ -55,3 +55,7 @@ nosetests.xml
 coverage.xml
 *.cover
 .hypothesis/
+
+
+processed_clips/
+video_clips/

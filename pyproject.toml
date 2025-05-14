@@ -4,18 +4,18 @@ version = "0.1.0"
 description = "RTMP server with FastAPI web interface for video streaming"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = { text = "MIT" }
 dependencies = [
     "fastapi>=0.103.1",
     "uvicorn>=0.23.2",
-    "rtmp-python>=0.3.0",  # Alternative RTMP server implementation
     "opencv-python>=4.8.0.74",
     "numpy>=1.24.3",
     "python-dotenv>=1.0.0",
     "jinja2>=3.1.2",
     "python-multipart>=0.0.6",
     "websockets>=11.0.3",
-    "ffmpeg-python>=0.2.0",  # For HLS conversion
+    "ffmpeg-python>=0.2.0",    # For HLS conversion
+    "google-genai>=1.15.0",    # For Gemini API
 ]
 
 [build-system]
