@@ -34,8 +34,8 @@ PROCESSED_DIR = Path("processed_clips")  # For clips that have been analyzed
 MAX_CLIPS_TO_KEEP = 100  # Maximum number of clips to store
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 CHUNK_DURATION = 10  # Duration of each clip in seconds
-S3_BUCKET = "posthog-vision"
-S3_PREFIX = "teams/2"
+S3_BUCKET = os.getenv("S3_BUCKET", "posthog-vision")  # Configurable S3 bucket name
+S3_PREFIX = os.getenv("S3_PREFIX", "teams/2")  # Configurable S3 prefix
 
 # Initialize PostHog client
 posthog.api_key = POSTHOG_ENV_KEY
