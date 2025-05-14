@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VisionHog SSE Test</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+
+    .container {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+
+    .status {
+      padding: 10px;
+      margin: 10px 0;
+      border-radius: 4px;
+    }
+
+    .connected {
+      background: #e6ffe6;
+      color: #006600;
+    }
+
+    .disconnected {
+      background: #ffe6e6;
+      color: #660000;
+    }
+
+    .event-list {
+      max-height: 600px;
+      overflow-y: auto;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      padding: 10px;
+      background: #fafafa;
+    }
+
+    .event {
+      margin: 10px 0;
+      padding: 15px;
+      background: white;
+      border-radius: 4px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    }
+
+    .event-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #eee;
+    }
+
+    .event-meta {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 10px;
+      margin-bottom: 15px;
+      padding: 10px;
+      background: #f8f9fa;
+      border-radius: 4px;
+    }
+
+    .event-meta-item {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .event-meta-label {
+      font-size: 0.8em;
+      color: #666;
+      margin-bottom: 2px;
+    }
+
+    .event-meta-value {
+      font-weight: 500;
+    }
+
+    .json-viewer {
+      background: #f8f9fa;
+      border-radius: 4px;
+      padding: 15px;
+      margin-top: 10px;
+    }
+
+    .json-viewer pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', monospace;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .controls {
+      margin: 20px 0;
+      display: flex;
+      gap: 10px;
+    }
+
+    button {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 4px;
+      background: #007bff;
+      color: white;
+      cursor: pointer;
+      font-size: 14px;
+      transition: background-color 0.2s;
+    }
+
+    button:hover {
+      background: #0056b3;
+    }
+
+    button:disabled {
+      background: #cccccc;
+      cursor: not-allowed;
+    }
+
+    .event-type {
+      font-size: 0.9em;
+      padding: 4px 8px;
+      border-radius: 4px;
+      background: #e9ecef;
+      color: #495057;
+    }
+
+    .timestamp {
+      color: #666;
+      font-size: 0.9em;
+    }
+
+    /* JSON Syntax Highlighting */
+    .json-key {
+      color: #881391;
+    }
+
+    .json-string {
+      color: #1A1AA6;
+    }
+
+    .json-number {
+      color: #1C00CF;
+    }
+
+    .json-boolean {
+      color: #0000FF;
+    }
+
+    .json-null {
+      color: #808080;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>VisionHog SSE Test</h1>
+    <div id="status" class="status disconnected">Disconnected</div>
+    <div class="controls">
+      <button id="connectBtn">Connect</button>
+      <button id="disconnectBtn" disabled>Disconnect</button>
+      <button id="clearBtn">Clear Events</button>
+    </div>
+    <div class="event-list" id="eventList"></div>
+  </div>
+
+  <script>
+    let eventSource = null;
+    const statusDiv = document.getElementById('status');
+    const eventList = document.getElementById('eventList');
+    const connectBtn = document.getElementById('connectBtn');
+    const disconnectBtn = document.getElementById('disconnectBtn');
+    const clearBtn = document.getElementById('clearBtn');
+
+    function syntaxHighlight(json) {
+      if (typeof json !== 'string') {
+        json = JSON.stringify(json, null, 2);
+      }
+      json = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      return json.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, function (match) {
+        let cls = 'json-number';
+        if (/^"/.test(match)) {
+          if (/:$/.test(match)) {
+            cls = 'json-key';
+          } else {
+            cls = 'json-string';
+          }
+        } else if (/true|false/.test(match)) {
+          cls = 'json-boolean';
+        } else if (/null/.test(match)) {
+          cls = 'json-null';
+        }
+        return '<span class="' + cls + '">' + match + '</span>';
+      });
+    }
+
+    function formatTimestamp(isoString) {
+      const date = new Date(isoString);
+      return date.toLocaleString();
+    }
+
+    function connect() {
+      if (eventSource) {
+        eventSource.close();
+      }
+
+      eventSource = new EventSource('http://192.168.168.86:8000/stream-analysis');
+
+      eventSource.onopen = () => {
+        statusDiv.textContent = 'Connected';
+        statusDiv.className = 'status connected';
+        connectBtn.disabled = true;
+        disconnectBtn.disabled = false;
+      };
+
+      eventSource.onerror = () => {
+        statusDiv.textContent = 'Connection Error';
+        statusDiv.className = 'status disconnected';
+        connectBtn.disabled = false;
+        disconnectBtn.disabled = true;
+        eventSource.close();
+      };
+
+      eventSource.addEventListener('analysis', (event) => {
+        const data = JSON.parse(event.data);
+        const eventDiv = document.createElement('div');
+        eventDiv.className = 'event';
+
+        const receivedTime = new Date().toLocaleTimeString();
+        const processedTime = formatTimestamp(data.processed_at);
+
+        eventDiv.innerHTML = `
+                    <div class="event-header">
+                        <div class="event-type">Analysis Event</div>
+                        <div class="timestamp">Received: ${receivedTime}</div>
+                    </div>
+                    <div class="event-meta">
+                        <div class="event-meta-item">
+                            <span class="event-meta-label">Clip Name</span>
+                            <span class="event-meta-value">${data.clip_name}</span>
+                        </div>
+                        <div class="event-meta-item">
+                            <span class="event-meta-label">Processed At</span>
+                            <span class="event-meta-value">${processedTime}</span>
+                        </div>
+                        <div class="event-meta-item">
+                            <span class="event-meta-label">Processing Time</span>
+                            <span class="event-meta-value">${data.processing_time.toFixed(2)}s</span>
+                        </div>
+                    </div>
+                    <div class="json-viewer">
+                        <pre>${syntaxHighlight(data.analysis)}</pre>
+                    </div>
+                `;
+
+        eventList.insertBefore(eventDiv, eventList.firstChild);
+      });
+    }
+
+    function disconnect() {
+      if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+        statusDiv.textContent = 'Disconnected';
+        statusDiv.className = 'status disconnected';
+        connectBtn.disabled = false;
+        disconnectBtn.disabled = true;
+      }
+    }
+
+    function clearEvents() {
+      eventList.innerHTML = '';
+    }
+
+    connectBtn.addEventListener('click', connect);
+    disconnectBtn.addEventListener('click', disconnect);
+    clearBtn.addEventListener('click', clearEvents);
+  </script>
+</body>
+
+</html>

@@ -49,6 +49,7 @@ dependencies = [
     { name = "jmespath" },
     { name = "s3transfer" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/02/e9/f20bbfcdea28329fa07ee353b85bea375d89d854f98c240b12a8a08e3664/boto3-1.38.16.tar.gz", hash = "sha256:0d4d9da05f20cf4bf351735307d9cda8711a5f7ad15de88b4e9372c6ee40d99f", size = 111807, upload-time = "2025-05-14T19:34:57.152Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b8/e2/6a39f2349947ea50a2a41f9f78c650928a072fe01f38f5b58d91acba1831/boto3-1.38.16-py3-none-any.whl", hash = "sha256:ea188276252bf95940925a92bb157239ae0f12406a14e347e2aa2029a1bea038", size = 139936, upload-time = "2025-05-14T19:34:55.173Z" },
 ]
@@ -661,6 +662,19 @@ wheels = [
 ]
 
 [[package]]
+name = "sse-starlette"
+version = "2.3.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "starlette" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/10/5f/28f45b1ff14bee871bacafd0a97213f7ec70e389939a80c60c0fb72a9fc9/sse_starlette-2.3.5.tar.gz", hash = "sha256:228357b6e42dcc73a427990e2b4a03c023e2495ecee82e14f07ba15077e334b2", size = 17511, upload-time = "2025-05-12T18:23:52.601Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c8/48/3e49cf0f64961656402c0023edbc51844fe17afe53ab50e958a6dbbbd499/sse_starlette-2.3.5-py3-none-any.whl", hash = "sha256:251708539a335570f10eaaa21d1848a10c42ee6dc3a9cf37ef42266cdb1c52a8", size = 10233, upload-time = "2025-05-12T18:23:50.722Z" },
+]
+
+[[package]]
 name = "starlette"
 version = "0.46.2"
 source = { registry = "https://pypi.org/simple" }
@@ -728,8 +742,10 @@ dependencies = [
     { name = "jinja2" },
     { name = "numpy" },
     { name = "opencv-python" },
+    { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "python-multipart" },
+    { name = "sse-starlette" },
     { name = "uvicorn" },
     { name = "websockets" },
 ]
@@ -743,9 +759,11 @@ requires-dist = [
     { name = "jinja2", specifier = ">=3.1.2" },
     { name = "numpy", specifier = ">=1.24.3" },
     { name = "opencv-python", specifier = ">=4.8.0.74" },
+    { name = "pydantic", specifier = ">=1.8.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "python-dotenv", specifier = ">=1.1.0" },
     { name = "python-multipart", specifier = ">=0.0.6" },
+    { name = "sse-starlette", specifier = ">=1.6.5" },
     { name = "uvicorn", specifier = ">=0.23.2" },
     { name = "websockets", specifier = ">=11.0.3" },
 ]

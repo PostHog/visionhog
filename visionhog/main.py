@@ -6,9 +6,19 @@ import threading
 import queue
 import shutil
 import boto3
+import json
+import asyncio
 from pathlib import Path
 from google import genai
 from google.genai import types
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from sse_starlette.sse import EventSourceResponse
+import uvicorn
+from pydantic import BaseModel
+from typing import Set, Dict
 
 # Configuration
 RTMP_URL = "http://localhost:8080/live/show.flv"  # HTTP FLV stream endpoint
@@ -20,7 +30,46 @@ CHUNK_DURATION = 10  # Duration of each clip in seconds
 S3_BUCKET = "posthog-vision"
 S3_PREFIX = "teams/2"
 
-PROMPT = """
+# Create FastAPI app
+app = FastAPI(title="VisionHog API")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Mount static files
+app.mount("/static", StaticFiles(directory="visionhog/static"), name="static")
+
+# SSE connection manager
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: Set[asyncio.Queue] = set()
+
+    async def connect(self):
+        queue = asyncio.Queue()
+        self.active_connections.add(queue)
+        return queue
+
+    def disconnect(self, queue: asyncio.Queue):
+        self.active_connections.remove(queue)
+
+    async def broadcast(self, message: str):
+        for connection in self.active_connections:
+            await connection.put(message)
+
+manager = ConnectionManager()
+
+# Pydantic model for prompt updates
+class PromptUpdate(BaseModel):
+    prompt: str
+
+# Global variable to store the prompt
+current_prompt = """
 Analyze this video of a retail environment and identify key customer events and interactions.
 For each event, provide a description and its approximate timestamp in the video.
 Return the output as a valid JSON array of objects that follows PostHog's event schema. Each object must have the following fields:
@@ -97,6 +146,130 @@ Common event types to look for:
 Use the same distinct_id to track the same customer throughout multiple events.
 """
 
+@app.get("/", response_class=HTMLResponse)
+async def landing_page():
+    """Landing page with links to available endpoints"""
+    return """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>VisionHog API</title>
+        <style>
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+                max-width: 800px;
+                margin: 0 auto;
+                padding: 20px;
+                background: #f5f5f5;
+            }
+            .container {
+                background: white;
+                padding: 30px;
+                border-radius: 8px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            }
+            h1 {
+                color: #333;
+                margin-bottom: 30px;
+            }
+            .endpoints {
+                display: grid;
+                gap: 20px;
+            }
+            .endpoint {
+                background: #f8f9fa;
+                padding: 20px;
+                border-radius: 6px;
+                border: 1px solid #e9ecef;
+            }
+            .endpoint h2 {
+                margin: 0 0 10px 0;
+                color: #007bff;
+            }
+            .endpoint p {
+                margin: 0 0 15px 0;
+                color: #666;
+            }
+            .endpoint a {
+                display: inline-block;
+                padding: 8px 16px;
+                background: #007bff;
+                color: white;
+                text-decoration: none;
+                border-radius: 4px;
+                transition: background-color 0.2s;
+            }
+            .endpoint a:hover {
+                background: #0056b3;
+            }
+            .method {
+                font-family: monospace;
+                background: #e9ecef;
+                padding: 2px 6px;
+                border-radius: 4px;
+                font-size: 0.9em;
+                color: #495057;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>VisionHog API</h1>
+            <div class="endpoints">
+                <div class="endpoint">
+                    <h2>SSE Test Page</h2>
+                    <p>Interactive test page for Server-Sent Events (SSE) streaming of video analysis results.</p>
+                    <a href="/static/sse-test.html">Open SSE Test Page</a>
+                </div>
+                <div class="endpoint">
+                    <h2>API Documentation</h2>
+                    <p>Interactive API documentation with Swagger UI.</p>
+                    <a href="/docs">View API Docs</a>
+                </div>
+                <div class="endpoint">
+                    <h2>Current Prompt</h2>
+                    <p>View the current prompt used for video analysis.</p>
+                    <a href="/prompt">View Prompt</a>
+                </div>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+
+@app.get("/prompt")
+async def get_prompt():
+    """Get the current prompt used for video analysis"""
+    return {"prompt": current_prompt}
+
+@app.post("/prompt")
+async def update_prompt(prompt_update: PromptUpdate):
+    """Update the prompt used for video analysis"""
+    global current_prompt
+    current_prompt = prompt_update.prompt
+    return {"message": "Prompt updated successfully", "prompt": current_prompt}
+
+@app.get("/stream-analysis")
+async def stream_analysis():
+    """Stream analysis results using Server-Sent Events"""
+    async def event_generator():
+        queue = await manager.connect()
+        try:
+            while True:
+                data = await queue.get()
+                yield {
+                    "event": "analysis",
+                    "data": data
+                }
+        except Exception as e:
+            print(f"Error in SSE stream: {e}")
+        finally:
+            manager.disconnect(queue)
+
+    return EventSourceResponse(event_generator())
+
 # Ensure directories exist
 OUTPUT_DIR.mkdir(exist_ok=True)
 PROCESSED_DIR.mkdir(exist_ok=True)
@@ -127,7 +300,7 @@ def analyze_with_gemini(video_path):
                     types.Part(
                         inline_data=types.Blob(data=video_bytes, mime_type='video/mp4')
                     ),
-                    types.Part(text=PROMPT)
+                    types.Part(text=current_prompt)
                 ]
             )
         )
@@ -155,6 +328,17 @@ def process_clip_worker():
             start_time = time.time()
             analysis = analyze_with_gemini(clip_path)
             processing_time = time.time() - start_time
+
+            # Create analysis result object
+            analysis_result = {
+                "clip_name": clip_path.name,
+                "processed_at": datetime.datetime.now().isoformat(),
+                "processing_time": processing_time,
+                "analysis": analysis
+            }
+
+            # Broadcast analysis result to SSE clients
+            asyncio.run(manager.broadcast(json.dumps(analysis_result)))
 
             # Save results
             results_path = clip_path.with_suffix('.txt')
@@ -322,8 +506,13 @@ def main():
         processing_thread.daemon = True
         processing_thread.start()
 
-        # Start capturing chunks
-        capture_stream_chunks()
+        # Start capturing chunks in a separate thread
+        capture_thread = threading.Thread(target=capture_stream_chunks)
+        capture_thread.daemon = True
+        capture_thread.start()
+
+        # Start FastAPI server
+        uvicorn.run(app, host="0.0.0.0", port=8000)
 
     except KeyboardInterrupt:
         print("\nShutting down...")
@@ -334,6 +523,8 @@ def main():
         # Wait for processing thread to finish
         if 'processing_thread' in locals():
             processing_thread.join(timeout=10)
+        if 'capture_thread' in locals():
+            capture_thread.join(timeout=10)
 
         # Clear out video_clips directory during shutdown
         print("Cleaning up video_clips directory...")
