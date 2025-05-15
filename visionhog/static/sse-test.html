@@ -218,7 +218,7 @@
         eventSource.close();
       }
 
-      eventSource = new EventSource('http://192.168.168.86:8000/stream-analysis');
+      eventSource = new EventSource('http://localhost:8059/stream-analysis');
 
       eventSource.onopen = () => {
         statusDiv.textContent = 'Connected';

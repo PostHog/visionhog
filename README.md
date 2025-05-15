@@ -66,7 +66,7 @@ alembic revision --autogenerate -m "description of changes"
 python -m visionhog.main
 ```
 
-The RTMP server will listen on `rtmp://localhost:1935/live` and the web interface will be available at `http://localhost:8000`.
+The RTMP server will listen on `rtmp://localhost:1935/live` and the web interface will be available at `http://localhost:8059`.
 
 ### Streaming to the server
 

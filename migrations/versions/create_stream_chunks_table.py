@@ -21,8 +21,6 @@ def upgrade() -> None:
         sa.Column('id', sa.Integer(), nullable=False),
         sa.Column('stream_id', sa.Integer(), nullable=False),
         sa.Column('team_id', sa.String(), nullable=False),
-        sa.Column('s3_video_key', sa.String(), nullable=False),
-        sa.Column('s3_analysis_key', sa.String(), nullable=True),
         sa.Column('clip_name', sa.String(), nullable=False),
         sa.Column('processed_at', sa.DateTime(), nullable=False),
         sa.Column('processing_time', sa.Float(), nullable=False),

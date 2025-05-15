@@ -29,8 +29,6 @@ class StreamChunk(Base):
     id = Column(Integer, primary_key=True, index=True)
     stream_id = Column(Integer, ForeignKey("streams.id"), nullable=False)
     team_id = Column(String, nullable=False)
-    s3_video_key = Column(String, nullable=False)
-    s3_analysis_key = Column(String, nullable=True)
     clip_name = Column(String, nullable=False)
     processed_at = Column(DateTime, nullable=False)
     processing_time = Column(Float, nullable=False)
@@ -58,8 +56,6 @@ class Stream(StreamBase):
 class StreamChunkBase(BaseModel):
     stream_id: int
     team_id: str
-    s3_video_key: str
-    s3_analysis_key: Optional[str] = None
     clip_name: str
     processed_at: datetime
     processing_time: float
@@ -71,8 +67,6 @@ class StreamChunkCreate(StreamChunkBase):
 class StreamChunkResponse(StreamChunkBase):
     id: int
     created_at: datetime
-    s3_video_url: Optional[str] = None  # Full S3 URL for the video
-    s3_analysis_url: Optional[str] = None  # Full S3 URL for the analysis
     analysis_text: Optional[str] = None  # The actual analysis text content
 
     class Config:

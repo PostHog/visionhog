@@ -5,10 +5,10 @@ import datetime
 import threading
 import queue
 import shutil
-import boto3
 import json
 import asyncio
 from pathlib import Path
+from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from fastapi import FastAPI, HTTPException, Depends, Query
@@ -20,26 +20,27 @@ import uvicorn
 from pydantic import BaseModel
 from typing import Set, Dict, List, Optional
 from sqlalchemy.orm import Session, selectinload, joinedload
-import posthog
+from posthog import Posthog
 from alembic.config import Config
 from alembic import command
 
 from .models import StreamDB, Stream, StreamCreate, StreamChunk, StreamChunkResponse, get_db, SessionLocal
 
+# Load environment variables from .env file
+load_dotenv()
+
 # Configuration
 POSTHOG_ENV_KEY = os.getenv("POSTHOG_ENV_KEY")
-RTMP_URL = "http://127.0.0.1:8080/live/show.flv"  # HTTP FLV stream endpoint
+RTMP_URL = "http://host.docker.internal:8080/live/livestream.flv"  # HTTP FLV stream endpoint
 OUTPUT_DIR = Path("video_clips")
 PROCESSED_DIR = Path("processed_clips")  # For clips that have been analyzed
 MAX_CLIPS_TO_KEEP = 100  # Maximum number of clips to store
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 CHUNK_DURATION = 10  # Duration of each clip in seconds
-S3_BUCKET = os.getenv("S3_BUCKET", "posthog-vision")  # Configurable S3 bucket name
-S3_PREFIX = os.getenv("S3_PREFIX", "teams/2")  # Configurable S3 prefix
 
 # Initialize PostHog client
-posthog.api_key = POSTHOG_ENV_KEY
-posthog.host = "https://app.posthog.com"  # Update this if using self-hosted PostHog
+posthog = Posthog('phc_fsN5YLls8XePWY7TXRo4RsZlLpErvzhDCcumYfmNU0K', host='http://localhost:8000')
+
 
 # Create FastAPI app
 app = FastAPI(title="VisionHog API")
@@ -357,24 +358,16 @@ async def list_team_chunks(
     # Enhance chunks with additional information
     enhanced_chunks = []
     for chunk in chunks:
-        # Generate S3 URLs
-        s3_video_url = f"https://{S3_BUCKET}.s3.amazonaws.com/{chunk.s3_video_key}"
-        s3_analysis_url = f"https://{S3_BUCKET}.s3.amazonaws.com/{chunk.s3_analysis_key}" if chunk.s3_analysis_key else None
-
         # Create enhanced chunk response
         enhanced_chunk = StreamChunkResponse(
             id=chunk.id,
             stream_id=chunk.stream_id,
             team_id=chunk.team_id,
-            s3_video_key=chunk.s3_video_key,
-            s3_analysis_key=chunk.s3_analysis_key,
             clip_name=chunk.clip_name,
             processed_at=chunk.processed_at,
             processing_time=chunk.processing_time,
             created_at=chunk.created_at,
             stream=chunk.stream,  # Include the full stream information
-            s3_video_url=s3_video_url,
-            s3_analysis_url=s3_analysis_url,
             analysis_text=chunk.analysis_json  # Use the analysis_json from the database
         )
         enhanced_chunks.append(enhanced_chunk)
@@ -412,9 +405,6 @@ PROCESSED_DIR.mkdir(exist_ok=True)
 
 # Set up Gemini
 client = genai.Client(api_key=GEMINI_API_KEY)
-
-# Set up S3 client
-s3_client = boto3.client('s3')
 
 # Create a queue for processing clips
 clip_queue = queue.Queue()
@@ -537,36 +527,18 @@ def process_clip_worker():
                 if results_path.exists():
                     shutil.move(str(results_path), str(PROCESSED_DIR / results_path.name))
 
-                # Upload to S3 and create database record
-                try:
-                    # Upload video file
-                    s3_video_key = f"{S3_PREFIX}/{clip_path.name}"
-                    s3_client.upload_file(str(dest_path), S3_BUCKET, s3_video_key)
-                    print(f"Uploaded video to s3://{S3_BUCKET}/{s3_video_key}")
-
-                    # Upload analysis file
-                    s3_analysis_key = f"{S3_PREFIX}/{results_path.name}"
-                    s3_client.upload_file(str(PROCESSED_DIR / results_path.name), S3_BUCKET, s3_analysis_key)
-                    print(f"Uploaded analysis to s3://{S3_BUCKET}/{s3_analysis_key}")
-
-                    # Create stream chunk record
-                    stream_chunk = StreamChunk(
-                        stream_id=stream.id,
-                        team_id=stream.team,
-                        s3_video_key=s3_video_key,
-                        s3_analysis_key=s3_analysis_key,
-                        clip_name=clip_path.name,
-                        processed_at=datetime.datetime.now(),
-                        processing_time=processing_time,
-                        analysis_json=analysis  # Save the analysis JSON
-                    )
-                    db.add(stream_chunk)
-                    db.commit()
-                    print(f"Created stream chunk record with ID: {stream_chunk.id}")
-
-                except Exception as e:
-                    print(f"Error uploading to S3 or creating database record: {e}")
-                    db.rollback()
+                # Create stream chunk record
+                stream_chunk = StreamChunk(
+                    stream_id=stream.id,
+                    team_id=stream.team,
+                    clip_name=clip_path.name,
+                    processed_at=datetime.datetime.now(),
+                    processing_time=processing_time,
+                    analysis_json=analysis  # Save the analysis JSON
+                )
+                db.add(stream_chunk)
+                db.commit()
+                print(f"Created stream chunk record with ID: {stream_chunk.id}")
 
                 clip_queue.task_done()
             finally:
@@ -803,12 +775,20 @@ def run_migrations():
         # Create Alembic configuration
         alembic_cfg = Config(os.path.join(os.path.dirname(os.path.dirname(__file__)), "alembic.ini"))
 
-        # Run the migration
-        command.upgrade(alembic_cfg, "head")
-        print("Database migrations completed successfully")
+        try:
+            # Run the migration
+            command.upgrade(alembic_cfg, "head")
+            print("Database migrations completed successfully")
+        except Exception as e:
+            # Check if this is a "table already exists" error
+            if "table streams already exists" in str(e):
+                print("Database tables already exist, skipping migrations")
+            else:
+                # Re-raise if it's a different error
+                raise
     except Exception as e:
         print(f"Error running migrations: {e}")
-        raise
+        # Don't raise the exception to allow the program to continue
 
 def main():
     print(f"Starting to capture {CHUNK_DURATION}-second chunks from {RTMP_URL}")
@@ -834,7 +814,7 @@ def main():
         capture_thread.start()
 
         # Start FastAPI server
-        uvicorn.run(app, host="0.0.0.0", port=8000)
+        uvicorn.run(app, host="0.0.0.0", port=8059)
 
     except KeyboardInterrupt:
         print("\nShutting down...")
