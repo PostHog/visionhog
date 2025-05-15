@@ -23,6 +23,7 @@ dependencies = [
     "sqlalchemy>=2.0.27",      # For database ORM
     "posthog>=3.5.0",          # For PostHog event tracking
     "alembic>=1.13.1",         # For database migrations
+    "ffmpeg",
 ]
 
 [build-system]

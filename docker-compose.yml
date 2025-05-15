@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   srs:
     image: ossrs/srs:5
@@ -58,3 +56,4 @@ networks:
 
 volumes:
   minio_data:
+
