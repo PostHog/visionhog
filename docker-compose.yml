@@ -6,8 +6,8 @@ services:
     ports:
       - "1935:1935"  # RTMP
       - "1985:1985"  # HTTP API
-      - "8080:8052"  # HTTP FLV
-      - "8000:8059/udp"  # UDP
+      - "8080:8080"  # HTTP FLV
+      - "8000:8000/udp"  # UDP
       - "10080:10080/udp"  # UDP
     restart: unless-stopped
 
