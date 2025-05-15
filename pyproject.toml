@@ -23,11 +23,12 @@ dependencies = [
     "sqlalchemy>=2.0.27",      # For database ORM
     "posthog>=3.5.0",          # For PostHog event tracking
     "alembic>=1.13.1",         # For database migrations
+    "ffmpeg",
 ]
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [tool.ruff]
 line-length = 88
