@@ -7,13 +7,11 @@ RUN apt-get update && apt-get install -y ffmpeg \
 # Set working directory
 WORKDIR /app
 
-COPY pyproject.toml ./
+# Copy the entire application first
+COPY . .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -e .
-
-# Copy the entire application first
-COPY . .
 
 # Create necessary directories
 RUN mkdir -p video_clips processed_clips
