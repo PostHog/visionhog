@@ -864,8 +864,17 @@ def run_migrations():
         alembic_cfg = AlembicConfig(os.path.join(os.path.dirname(os.path.dirname(__file__)), "alembic.ini"))
 
         # Run the migration
-        command.upgrade(alembic_cfg, "head")
-        print("Database migrations completed successfully")
+        try:
+            # Run the migration
+            command.upgrade(alembic_cfg, "head")
+            print("Database migrations completed successfully")
+        except Exception as e:
+            # Check if this is a "table already exists" error
+            if "table streams already exists" in str(e):
+                print("Database tables already exist, skipping migrations")
+            else:
+                # Re-raise if it's a different error
+                raise
     except Exception as e:
         print(f"Error running migrations: {e}")
         raise
