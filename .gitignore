@@ -63,3 +63,5 @@ video_clips/
 *.db
 *.db-shm
 *.db-wal
+
+stream_log.txt

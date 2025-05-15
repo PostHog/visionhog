@@ -87,6 +87,11 @@ alembic revision --autogenerate -m "description of changes"
 
 ## Usage
 
+Start a live stream without the need for james's iphone
+```bash
+./stream_traffic.sh
+```
+
 ```bash
 # Start the server
 python -m visionhog.main
@@ -95,6 +100,12 @@ python -m visionhog.main
 The RTMP server will listen on `rtmp://localhost:1935/live` and the web interface will be available at `http://localhost:8069`.
 
 ### Streaming to the server
+
+Start a live stream without the need for james's iphone
+
+```bash
+./stream_traffic.sh
+```
 
 Using FFmpeg:
 ```bash
