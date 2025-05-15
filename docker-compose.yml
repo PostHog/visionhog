@@ -11,18 +11,6 @@ services:
     networks:
       - visionhog_network
 
-  minio:
-    image: minio/minio
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-    volumes:
-      - minio_data:/data
-    command: server /data --console-address ":9001"
-    restart: unless-stopped
-    networks:
-      - visionhog_network
-
   visionhog:
     build:
       context: .
@@ -37,16 +25,17 @@ services:
       - USE_MINIO=true
       - S3_BUCKET=posthog-vision
       - S3_PREFIX=teams/2
-      - MINIO_ENDPOINT=http://minio:9000
-      - MINIO_ACCESS_KEY=minioadmin
-      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_ENDPOINT=http://host.docker.internal:19000
+      - MINIO_ACCESS_KEY=object_storage_root_user
+      - MINIO_SECRET_KEY=object_storage_root_password
       - MINIO_SECURE=false
       - STREAM_URL=http://srs:8080/live/show.flv
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     env_file:
       - .env
     depends_on:
       - srs
-      - minio
     restart: unless-stopped
     networks:
       - visionhog_network

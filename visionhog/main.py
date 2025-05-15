@@ -637,6 +637,14 @@ def process_clip_worker():
                     s3_client.upload_file(str(PROCESSED_DIR / results_path.name), S3_BUCKET, s3_analysis_key)
                     logger.info(f"Uploaded analysis to s3://{S3_BUCKET}/{s3_analysis_key}")
 
+                    # Remove files from processed_clips after successful upload
+                    try:
+                        dest_path.unlink()
+                        (PROCESSED_DIR / results_path.name).unlink()
+                        logger.info(f"Removed processed files from {PROCESSED_DIR}")
+                    except Exception as e:
+                        logger.error(f"Error removing processed files: {e}")
+
                     # Create stream chunk record
                     stream_chunk = StreamChunk(
                         stream_id=stream.id,
