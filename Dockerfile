@@ -7,17 +7,16 @@ RUN apt-get update && apt-get install -y ffmpeg \
 # Set working directory
 WORKDIR /app
 
-# Install uv
-RUN pip install uv
+COPY pyproject.toml poetry.lock ./
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -e .
 
 # Copy the entire application first
 COPY . .
 
 # Create necessary directories
 RUN mkdir -p video_clips processed_clips
-
-# Install Python dependencies
-RUN pip install --no-cache-dir -e .
 
 # Expose the port
 EXPOSE 8069
