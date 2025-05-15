@@ -868,7 +868,7 @@ def run_migrations():
         print("Database migrations completed successfully")
     except Exception as e:
         print(f"Error running migrations: {e}")
-        raise
+        print("ignoring")
 
 def main():
     print(f"Starting to capture {CHUNK_DURATION}-second chunks from {STREAM_URL}")
