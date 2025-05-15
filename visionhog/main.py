@@ -35,7 +35,7 @@ from .models import StreamDB, Stream, StreamCreate, StreamChunk, StreamChunkResp
 
 # Configuration
 POSTHOG_ENV_KEY = os.getenv("POSTHOG_ENV_KEY")
-POSTHOG_HOST = os.getenv("POSTHOG_HOST", "https://app.posthog.com")  # Default to PostHog cloud
+POSTHOG_HOST = os.getenv("POSTHOG_HOST", "http://localhost:8000")  # Default to PostHog cloud
 STREAM_URL = os.getenv("STREAM_URL", "http://127.0.0.1:8080/live/show.flv")  # HTTP FLV stream endpoint
 OUTPUT_DIR = Path("video_clips")
 PROCESSED_DIR = Path("processed_clips")  # For clips that have been analyzed

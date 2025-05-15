@@ -87,6 +87,19 @@ alembic revision --autogenerate -m "description of changes"
 
 ## Usage
 
+### Using docker compose
+
+```bash
+docker compose up --build
+```
+
+Run OBS
+Set the stream target to `rtmp://localhost:1935/live/show`
+In posthog add `http://localhost:8082/live/show.flv` as a stream config
+Add events!
+
+### Manual
+
 Start a live stream without the need for james's iphone
 ```bash
 ./stream_traffic.sh
