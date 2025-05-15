@@ -878,6 +878,37 @@ def run_migrations():
         print(f"Error running migrations: {e}")
         print("ignoring")
 
+def ensure_bucket_exists():
+    """Ensure that the S3/MinIO bucket exists, creating it if necessary"""
+    print(f"Ensuring bucket {S3_BUCKET} exists...")
+    try:
+        # Check if bucket exists
+        try:
+            s3_client.head_bucket(Bucket=S3_BUCKET)
+            print(f"Bucket {S3_BUCKET} already exists")
+        except s3_client.exceptions.ClientError as e:
+            # If a 404 error, then the bucket does not exist
+            error_code = int(e.response['Error']['Code'])
+            if error_code == 404:
+                print(f"Bucket {S3_BUCKET} does not exist, creating it...")
+                if USE_MINIO:
+                    # For MinIO, just create the bucket
+                    s3_client.create_bucket(Bucket=S3_BUCKET)
+                else:
+                    # For AWS S3, create with region configuration
+                    location = {'LocationConstraint': s3_client.meta.region_name}
+                    s3_client.create_bucket(
+                        Bucket=S3_BUCKET,
+                        CreateBucketConfiguration=location
+                    )
+                print(f"Bucket {S3_BUCKET} created successfully")
+            else:
+                # If it's another error, raise it
+                raise
+    except Exception as e:
+        print(f"Error ensuring bucket exists: {e}")
+        print("Will attempt to use the bucket anyway")
+
 def main():
     print(f"Starting to capture {CHUNK_DURATION}-second chunks from {STREAM_URL}")
     print(f"Saving clips to {OUTPUT_DIR.absolute()}")
@@ -893,6 +924,9 @@ def main():
 
         # Bootstrap default stream configuration
         bootstrap_default_stream()
+        
+        # Ensure S3/MinIO bucket exists
+        ensure_bucket_exists()
 
         # Start processing thread
         processing_thread = threading.Thread(target=process_clip_worker)
