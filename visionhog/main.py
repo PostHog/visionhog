@@ -34,12 +34,12 @@ from .models import StreamDB, Stream, StreamCreate, StreamChunk, StreamChunkResp
 
 
 # Configuration
-# POSTHOG_ENV_KEY = os.getenv("POSTHOG_ENV_KEY")
 STREAM_URL = os.getenv("STREAM_URL", "http://127.0.0.1:8080/live/show.flv")  # HTTP FLV stream endpoint
 OUTPUT_DIR = Path("video_clips")
 PROCESSED_DIR = Path("processed_clips")  # For clips that have been analyzed
 MAX_CLIPS_TO_KEEP = 100  # Maximum number of clips to store
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+POSTHOG_ENV_KEY = os.getenv("POSTHOG_ENV_KEY")
 CHUNK_DURATION = 10  # Duration of each clip in seconds
 
 # Storage configuration
@@ -54,10 +54,7 @@ MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
 MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
 
 # Initialize PostHog client
-# posthog.api_key = POSTHOG_ENV_KEY
-# posthog.host = "https://app.posthog.com"  # Update this if using self-hosted PostHog
-
-posthog = Posthog("phx_gLWG7EZgoMXWy3lIr9ZDd7sTINZ2OfdqzXWHnJFUivZb25k", host='http://localhost:8010')
+posthog = Posthog(POSTHOG_ENV_KEY, host='http://localhost:8010')
 
 # Initialize S3/MinIO client
 if USE_MINIO:
