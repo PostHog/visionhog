@@ -6,20 +6,15 @@ services:
     ports:
       - "1935:1935"  # RTMP
       - "1985:1985"  # HTTP API
-      - "8080:8080"  # HTTP FLV
-      - "8000:8000/udp"  # UDP
+      - "8082:8080"  # HTTP FLV
+      - "8002:8000/udp"  # UDP
       - "10080:10080/udp"  # UDP
-    volumes:
-      - ./srs:/usr/local/srs/conf
     restart: unless-stopped
     networks:
       - visionhog_network
 
   minio:
     image: minio/minio
-    ports:
-      - "9000:9000"  # API
-      - "9001:9001"  # Console
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin

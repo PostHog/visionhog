@@ -1,22 +1,23 @@
-FROM python:3.11-slim
+FROM python:3.13-slim
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y \
-  ffmpeg \
+RUN apt-get update && apt-get install -y ffmpeg \
   && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
 
-# Copy requirements first to leverage Docker cache
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install uv
+RUN pip install uv
 
-# Copy the rest of the application
+# Copy the entire application first
 COPY . .
 
 # Create necessary directories
 RUN mkdir -p video_clips processed_clips
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -e .
 
 # Expose the port
 EXPOSE 8069

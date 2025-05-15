@@ -6,6 +6,7 @@ import threading
 import queue
 import shutil
 import boto3
+from botocore.config import Config
 import json
 import asyncio
 from pathlib import Path
@@ -21,7 +22,7 @@ from pydantic import BaseModel
 from typing import Set, Dict, List, Optional
 from sqlalchemy.orm import Session, selectinload, joinedload
 import posthog
-from alembic.config import Config
+from alembic.config import Config as AlembicConfig
 from alembic import command
 from dotenv import load_dotenv
 
@@ -63,7 +64,7 @@ if USE_MINIO:
         endpoint_url=MINIO_ENDPOINT,
         aws_access_key_id=MINIO_ACCESS_KEY,
         aws_secret_access_key=MINIO_SECRET_KEY,
-        config=boto3.Config(signature_version='s3v4'),
+        config=Config(signature_version='s3v4'),
         verify=MINIO_SECURE
     )
 else:
@@ -860,7 +861,7 @@ def run_migrations():
         migrations_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "migrations")
 
         # Create Alembic configuration
-        alembic_cfg = Config(os.path.join(os.path.dirname(os.path.dirname(__file__)), "alembic.ini"))
+        alembic_cfg = AlembicConfig(os.path.join(os.path.dirname(os.path.dirname(__file__)), "alembic.ini"))
 
         # Run the migration
         command.upgrade(alembic_cfg, "head")
