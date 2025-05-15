@@ -618,7 +618,8 @@ def process_clip_worker():
                                 'team_id': stream.team,
                                 'video_clip': clip_path.name,
                                 'processed_at': datetime.datetime.now().isoformat(),
-                                'processing_time': processing_time
+                                'processing_time': processing_time,
+                                'token': POSTHOG_ENV_KEY
                             })
 
                             # Send to PostHog
