@@ -452,7 +452,19 @@ def analyze_with_gemini(video_path, db: Session):
             )
         )
 
-        return response.text
+        # Sanitize the response by removing markdown code block formatting
+        text = response.text
+        if text.startswith("```json"):
+            text = text[7:]  # Remove ```json prefix
+        elif text.startswith("```"):
+            text = text[3:]  # Remove ``` prefix
+        if text.endswith("```"):
+            text = text[:-3]  # Remove ``` suffix
+
+        # Strip any leading/trailing whitespace
+        text = text.strip()
+
+        return text
     except Exception as e:
         print(f"Error analyzing with Gemini: {e}")
         return f"Analysis failed: {str(e)}"

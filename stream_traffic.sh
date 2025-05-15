@@ -2,9 +2,10 @@
 
 # Configuration
 SOURCE_URL="https://wzmedia.dot.ca.gov/D3/5_JCT50_SAC5_NB.stream/playlist.m3u8"
+# SOURCE_URL="https://media-sfs7.vdotcameras.com/rtplive/RichmondCS095NB0593/chunklist_w2085243269.m3u8"
 RTMP_URL="rtmp://localhost:1935/live/show"
 MAX_RETRIES=0  # 0 means infinite retries
-RETRY_DELAY=1  # seconds to wait between retries
+RETRY_DELAY=1
 LOG_FILE="stream_log.txt"
 
 echo "Starting stream monitor script at $(date)" | tee -a "$LOG_FILE"
@@ -25,8 +26,13 @@ while [ $MAX_RETRIES -eq 0 ] || [ $retry_count -lt $MAX_RETRIES ]; do
 
     exit_code=$?
 
-    # Check for common error patterns in the output
-    if echo "$output" | grep -q "Error\|Failed\|Broken pipe\|Conversion failed"; then
+    # Check for specific error patterns in the output
+    if echo "$output" | grep -q "404 Not Found"; then
+        echo "$(date) - Stream source returned 404 Not Found. This might be a temporary issue. Waiting $RETRY_DELAY seconds..." | tee -a "$LOG_FILE"
+        sleep $RETRY_DELAY
+        retry_count=$((retry_count+1))
+        continue
+    elif echo "$output" | grep -q "Error\|Failed\|Broken pipe\|Conversion failed"; then
         echo "$(date) - FFmpeg failed with errors in output, restarting in $RETRY_DELAY seconds..." | tee -a "$LOG_FILE"
         sleep $RETRY_DELAY
         retry_count=$((retry_count+1))
