@@ -45,12 +45,15 @@ services:
       - STREAM_URL=http://srs:8080/live/show.flv
       - POSTHOG_ENV_KEY=${POSTHOG_ENV_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - POSTHOG_HOST=${POSTHOG_HOST:-http://host.docker.internal:8000}  # Use host.docker.internal to access host machine
     env_file:
       - .env
     depends_on:
       - srs
       - minio
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - visionhog_network
 

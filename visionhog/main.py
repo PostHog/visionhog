@@ -21,7 +21,7 @@ import uvicorn
 from pydantic import BaseModel
 from typing import Set, Dict, List, Optional
 from sqlalchemy.orm import Session, selectinload, joinedload
-import posthog
+from posthog import Posthog
 from alembic.config import Config as AlembicConfig
 from alembic import command
 from dotenv import load_dotenv
@@ -35,6 +35,7 @@ from .models import StreamDB, Stream, StreamCreate, StreamChunk, StreamChunkResp
 
 # Configuration
 POSTHOG_ENV_KEY = os.getenv("POSTHOG_ENV_KEY")
+POSTHOG_HOST = os.getenv("POSTHOG_HOST", "https://app.posthog.com")  # Default to PostHog cloud
 STREAM_URL = os.getenv("STREAM_URL", "http://127.0.0.1:8080/live/show.flv")  # HTTP FLV stream endpoint
 OUTPUT_DIR = Path("video_clips")
 PROCESSED_DIR = Path("processed_clips")  # For clips that have been analyzed
@@ -54,8 +55,10 @@ MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
 MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
 
 # Initialize PostHog client
-posthog.api_key = POSTHOG_ENV_KEY
-posthog.host = "https://app.posthog.com"  # Update this if using self-hosted PostHog
+posthog = Posthog(
+    api_key=POSTHOG_ENV_KEY,
+    host=POSTHOG_HOST  # Use the environment variable
+)
 
 # Initialize S3/MinIO client
 if USE_MINIO:
