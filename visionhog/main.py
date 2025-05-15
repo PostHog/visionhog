@@ -95,8 +95,10 @@ MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
 MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
 
 # Initialize PostHog client
-posthog = Posthog(POSTHOG_ENV_KEY, host=POSTHOG_HOST)
-posthog.capture("UP", "UP")
+posthog = Posthog(
+    api_key=POSTHOG_ENV_KEY,
+    host=POSTHOG_HOST  # Use the environment variable
+)
 
 # Initialize S3/MinIO client
 if USE_MINIO:

@@ -30,13 +30,16 @@ services:
       - MINIO_SECRET_KEY=object_storage_root_password
       - MINIO_SECURE=false
       - STREAM_URL=http://srs:8080/live/show.flv
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - POSTHOG_ENV_KEY=${POSTHOG_ENV_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - POSTHOG_HOST=${POSTHOG_HOST:-http://host.docker.internal:8010}  # Use host.docker.internal to access host machine
     env_file:
       - .env
     depends_on:
       - srs
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - visionhog_network
 
