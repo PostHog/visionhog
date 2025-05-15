@@ -80,6 +80,7 @@ PROCESSED_DIR = Path("processed_clips")  # For clips that have been analyzed
 MAX_CLIPS_TO_KEEP = 100  # Maximum number of clips to store
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 POSTHOG_ENV_KEY = os.getenv("POSTHOG_ENV_KEY")
+POSTHOG_HOST = os.getenv("POSTHOG_HOST", "http://host.docker.internal:8010")
 CHUNK_DURATION = 10  # Duration of each clip in seconds
 
 # Storage configuration
