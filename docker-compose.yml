@@ -45,6 +45,8 @@ services:
       - STREAM_URL=http://srs:8080/live/show.flv
       - POSTHOG_ENV_KEY=${POSTHOG_ENV_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+    env_file:
+      - .env
     depends_on:
       - srs
       - minio
