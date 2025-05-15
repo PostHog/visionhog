@@ -9,6 +9,8 @@ import boto3
 from botocore.config import Config
 import json
 import asyncio
+import logging
+import logging.handlers
 from pathlib import Path
 from google import genai
 from google.genai import types
@@ -25,6 +27,44 @@ from posthog import Posthog
 from alembic.config import Config as AlembicConfig
 from alembic import command
 from dotenv import load_dotenv
+
+# Create a queue for logging
+log_queue = queue.Queue()
+
+# Custom logging handler that puts records in the queue
+class QueueHandler(logging.Handler):
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            log_queue.put(msg)
+        except Exception:
+            self.handleError(record)
+
+# Configure logging
+logger = logging.getLogger('visionhog')
+logger.setLevel(logging.INFO)
+
+# Create formatter
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+# Create queue handler
+queue_handler = QueueHandler()
+queue_handler.setFormatter(formatter)
+logger.addHandler(queue_handler)
+
+def log_worker():
+    """Worker thread that processes log messages from the queue"""
+    while not exit_flag.is_set():
+        try:
+            # Get log message from queue with timeout to check exit flag
+            try:
+                msg = log_queue.get(timeout=1.0)
+                print(msg)  # Print to stdout
+                log_queue.task_done()
+            except queue.Empty:
+                continue
+        except Exception as e:
+            print(f"Error in log worker: {e}")
 
 # Load environment variables from .env file
 load_dotenv()
@@ -497,7 +537,11 @@ def analyze_with_gemini(video_path, db: Session):
 
 def process_clip_worker():
     """Worker function to process clips in the queue"""
-    print("Clip processing worker started")
+    logger.info("Clip processing worker started")
+
+    # Create a new event loop for this thread
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
 
     while not exit_flag.is_set() or not clip_queue.empty():
         try:
@@ -507,7 +551,7 @@ def process_clip_worker():
             except queue.Empty:
                 continue
 
-            print(f"Processing clip: {clip_path}")
+            logger.info(f"Processing clip: {clip_path}")
 
             # Create a new database session for this thread
             db = SessionLocal()
@@ -515,7 +559,7 @@ def process_clip_worker():
                 # Get stream configuration
                 stream = db.query(StreamDB).filter(StreamDB.team == "2").first()
                 if stream is None:
-                    print("No stream configuration found for team 2")
+                    logger.warning("No stream configuration found for team 2")
                     continue
 
                 # Analyze with Gemini
@@ -531,8 +575,8 @@ def process_clip_worker():
                     "analysis": analysis
                 }
 
-                # Broadcast analysis result to SSE clients
-                asyncio.run(manager.broadcast(json.dumps(analysis_result)))
+                # Broadcast analysis result to SSE clients using the thread's event loop
+                loop.run_until_complete(manager.broadcast(json.dumps(analysis_result)))
 
                 # Save results
                 results_path = clip_path.with_suffix('.txt')
@@ -542,7 +586,7 @@ def process_clip_worker():
                     f.write(f"Processing time: {processing_time:.2f} seconds\n\n")
                     f.write(analysis)
 
-                print(f"Analysis saved to {results_path}")
+                logger.info(f"Analysis saved to {results_path}")
 
                 # If emit_events is enabled, send events to PostHog
                 if stream.emit_events:
@@ -567,11 +611,11 @@ def process_clip_worker():
                                 properties=event['properties']
                             )
 
-                        print(f"Successfully emitted {len(events)} events to PostHog")
+                        logger.info(f"Successfully emitted {len(events)} events to PostHog")
                     except json.JSONDecodeError as e:
-                        print(f"Failed to parse analysis result as JSON: {e}")
+                        logger.error(f"Failed to parse analysis result as JSON: {e}")
                     except Exception as e:
-                        print(f"Error emitting events to PostHog: {e}")
+                        logger.error(f"Error emitting events to PostHog: {e}")
 
                 # Move to processed directory
                 dest_path = PROCESSED_DIR / clip_path.name
@@ -586,12 +630,12 @@ def process_clip_worker():
                     # Upload video file
                     s3_video_key = f"{S3_PREFIX}/{clip_path.name}"
                     s3_client.upload_file(str(dest_path), S3_BUCKET, s3_video_key)
-                    print(f"Uploaded video to s3://{S3_BUCKET}/{s3_video_key}")
+                    logger.info(f"Uploaded video to s3://{S3_BUCKET}/{s3_video_key}")
 
                     # Upload analysis file
                     s3_analysis_key = f"{S3_PREFIX}/{results_path.name}"
                     s3_client.upload_file(str(PROCESSED_DIR / results_path.name), S3_BUCKET, s3_analysis_key)
-                    print(f"Uploaded analysis to s3://{S3_BUCKET}/{s3_analysis_key}")
+                    logger.info(f"Uploaded analysis to s3://{S3_BUCKET}/{s3_analysis_key}")
 
                     # Create stream chunk record
                     stream_chunk = StreamChunk(
@@ -606,10 +650,10 @@ def process_clip_worker():
                     )
                     db.add(stream_chunk)
                     db.commit()
-                    print(f"Created stream chunk record with ID: {stream_chunk.id}")
+                    logger.info(f"Created stream chunk record with ID: {stream_chunk.id}")
 
                 except Exception as e:
-                    print(f"Error uploading to S3 or creating database record: {e}")
+                    logger.error(f"Error uploading to S3 or creating database record: {e}")
                     db.rollback()
 
                 clip_queue.task_done()
@@ -618,9 +662,9 @@ def process_clip_worker():
                 db.close()
 
         except Exception as e:
-            print(f"Error in processing worker: {e}")
+            logger.error(f"Error in processing worker: {e}")
 
-    print("Clip processing worker stopped")
+    logger.info("Clip processing worker stopped")
 
 def cleanup_old_clips():
     """Remove excess clips to manage disk space"""
@@ -656,7 +700,7 @@ def capture_stream_chunks():
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             output_path = OUTPUT_DIR / f"clip_{timestamp}.mp4"
 
-            print(f"Capturing chunk {chunk_count + 1} to {output_path}...")
+            logger.info(f"Capturing chunk {chunk_count + 1} to {output_path}...")
 
             # Use FFmpeg to capture a segment of the stream
             try:
@@ -699,16 +743,16 @@ def capture_stream_chunks():
                 try:
                     ffmpeg.run(stream, capture_stdout=True, capture_stderr=True, quiet=False)
                 except ffmpeg.Error as e:
-                    print(f"FFmpeg stderr output: {e.stderr.decode() if e.stderr else 'No stderr output'}")
+                    logger.error(f"FFmpeg stderr output: {e.stderr.decode() if e.stderr else 'No stderr output'}")
                     raise
 
                 # Calculate actual capture time
                 elapsed = time.time() - start_time
-                print(f"Chunk captured in {elapsed:.2f} seconds")
+                logger.info(f"Chunk captured in {elapsed:.2f} seconds")
 
                 # Check if file was created and has content
                 if output_path.exists() and output_path.stat().st_size > 0:
-                    print(f"Successfully saved chunk to {output_path} ({output_path.stat().st_size} bytes)")
+                    logger.info(f"Successfully saved chunk to {output_path} ({output_path.stat().st_size} bytes)")
                     chunk_count += 1
 
                     # Add to processing queue
@@ -719,12 +763,12 @@ def capture_stream_chunks():
                         cleanup_old_clips()
                         last_cleanup = time.time()
                 else:
-                    print(f"Warning: Failed to capture chunk or empty file created")
+                    logger.warning(f"Failed to capture chunk or empty file created")
 
                 # Calculate time adjustment to maintain precise intervals
                 time_adjustment = max(0, CHUNK_DURATION - elapsed)
                 if time_adjustment > 0:
-                    print(f"Waiting {time_adjustment:.2f} seconds to align with {CHUNK_DURATION}-second intervals...")
+                    logger.info(f"Waiting {time_adjustment:.2f} seconds to align with {CHUNK_DURATION}-second intervals...")
 
                     # Use small sleep increments to check exit flag
                     end_wait = time.time() + time_adjustment
@@ -732,12 +776,12 @@ def capture_stream_chunks():
                         time.sleep(0.1)
 
             except ffmpeg.Error as e:
-                print(f"FFmpeg error: {e}")
+                logger.error(f"FFmpeg error: {e}")
                 # Short pause before retry
                 time.sleep(1)
 
             except Exception as e:
-                print(f"Error during capture: {e}")
+                logger.error(f"Error during capture: {e}")
                 # Short pause before retry
                 time.sleep(1)
 
@@ -746,9 +790,9 @@ def capture_stream_chunks():
                 break
 
     except KeyboardInterrupt:
-        print("Capturing stopped by user")
+        logger.info("Capturing stopped by user")
     finally:
-        print("Capture process ending, waiting for queue to empty...")
+        logger.info("Capture process ending, waiting for queue to empty...")
         # Wait for queue to be processed
         clip_queue.join()
 
@@ -759,7 +803,7 @@ def bootstrap_default_stream():
         # Check if default stream exists
         stream = db.query(StreamDB).filter(StreamDB.team == "2").first()
         if stream is None:
-            print("Creating default stream configuration for team 2...")
+            logger.info("Creating default stream configuration for team 2...")
             default_prompt = """
 Analyze this video of a retail environment and identify key customer events and interactions.
 For each event, provide a description and its approximate timestamp in the video.
@@ -844,11 +888,11 @@ Use the same distinct_id to track the same customer throughout multiple events.
             )
             db.add(default_stream)
             db.commit()
-            print("Default stream configuration created successfully")
+            logger.info("Default stream configuration created successfully")
         else:
-            print("Default stream configuration already exists")
+            logger.info("Default stream configuration already exists")
     except Exception as e:
-        print(f"Error during bootstrap: {e}")
+        logger.error(f"Error during bootstrap: {e}")
         db.rollback()
     finally:
         db.close()
@@ -866,31 +910,31 @@ def run_migrations():
         try:
             # Run the migration
             command.upgrade(alembic_cfg, "head")
-            print("Database migrations completed successfully")
+            logger.info("Database migrations completed successfully")
         except Exception as e:
             # Check if this is a "table already exists" error
             if "table streams already exists" in str(e):
-                print("Database tables already exist, skipping migrations")
+                logger.info("Database tables already exist, skipping migrations")
             else:
                 # Re-raise if it's a different error
                 raise
     except Exception as e:
-        print(f"Error running migrations: {e}")
-        print("ignoring")
+        logger.error(f"Error running migrations: {e}")
+        logger.info("ignoring")
 
 def ensure_bucket_exists():
     """Ensure that the S3/MinIO bucket exists, creating it if necessary"""
-    print(f"Ensuring bucket {S3_BUCKET} exists...")
+    logger.info(f"Ensuring bucket {S3_BUCKET} exists...")
     try:
         # Check if bucket exists
         try:
             s3_client.head_bucket(Bucket=S3_BUCKET)
-            print(f"Bucket {S3_BUCKET} already exists")
+            logger.info(f"Bucket {S3_BUCKET} already exists")
         except s3_client.exceptions.ClientError as e:
             # If a 404 error, then the bucket does not exist
             error_code = int(e.response['Error']['Code'])
             if error_code == 404:
-                print(f"Bucket {S3_BUCKET} does not exist, creating it...")
+                logger.info(f"Bucket {S3_BUCKET} does not exist, creating it...")
                 if USE_MINIO:
                     # For MinIO, just create the bucket
                     s3_client.create_bucket(Bucket=S3_BUCKET)
@@ -901,30 +945,44 @@ def ensure_bucket_exists():
                         Bucket=S3_BUCKET,
                         CreateBucketConfiguration=location
                     )
-                print(f"Bucket {S3_BUCKET} created successfully")
+                logger.info(f"Bucket {S3_BUCKET} created successfully")
             else:
                 # If it's another error, raise it
                 raise
     except Exception as e:
-        print(f"Error ensuring bucket exists: {e}")
-        print("Will attempt to use the bucket anyway")
+        logger.error(f"Error ensuring bucket exists: {e}")
+        logger.info("Will attempt to use the bucket anyway")
+
+def run_fastapi():
+    """Run the FastAPI server"""
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8069,
+        reload=False
+    )
 
 def main():
-    print(f"Starting to capture {CHUNK_DURATION}-second chunks from {STREAM_URL}")
-    print(f"Saving clips to {OUTPUT_DIR.absolute()}")
-    print(f"Processed clips will be moved to {PROCESSED_DIR.absolute()}")
-    print(f"Using {'MinIO' if USE_MINIO else 'S3'} for storage")
+    logger.info(f"Starting VisionHog service...")
+    logger.info(f"Stream URL: {STREAM_URL}")
+    logger.info(f"Output directory: {OUTPUT_DIR.absolute()}")
+    logger.info(f"Processed directory: {PROCESSED_DIR.absolute()}")
+    logger.info(f"Storage: {'MinIO' if USE_MINIO else 'S3'}")
     if USE_MINIO:
-        print(f"MinIO endpoint: {MINIO_ENDPOINT}")
-    print("Press Ctrl+C to stop capturing")
+        logger.info(f"MinIO endpoint: {MINIO_ENDPOINT}")
 
     try:
+        # Start logging thread
+        log_thread = threading.Thread(target=log_worker)
+        log_thread.daemon = True
+        log_thread.start()
+
         # Run database migrations
         run_migrations()
 
         # Bootstrap default stream configuration
         bootstrap_default_stream()
-        
+
         # Ensure S3/MinIO bucket exists
         ensure_bucket_exists()
 
@@ -938,11 +996,17 @@ def main():
         capture_thread.daemon = True
         capture_thread.start()
 
-        # Start FastAPI server
-        uvicorn.run(app, host="0.0.0.0", port=8069)
+        # Start FastAPI server in a separate thread
+        api_thread = threading.Thread(target=run_fastapi)
+        api_thread.daemon = True
+        api_thread.start()
+
+        # Keep the main thread alive and handle keyboard interrupt
+        while True:
+            time.sleep(1)
 
     except KeyboardInterrupt:
-        print("\nShutting down...")
+        logger.info("\nShutting down...")
     finally:
         # Signal threads to exit
         exit_flag.set()
@@ -952,9 +1016,13 @@ def main():
             processing_thread.join(timeout=10)
         if 'capture_thread' in locals():
             capture_thread.join(timeout=10)
+        if 'api_thread' in locals():
+            api_thread.join(timeout=10)
+        if 'log_thread' in locals():
+            log_thread.join(timeout=10)
 
         # Clear out video_clips directory during shutdown
-        print("Cleaning up video_clips directory...")
+        logger.info("Cleaning up video_clips directory...")
         for file in OUTPUT_DIR.glob("*"):
             try:
                 if file.is_file():
@@ -962,9 +1030,9 @@ def main():
                 elif file.is_dir():
                     shutil.rmtree(file)
             except Exception as e:
-                print(f"Error removing {file}: {e}")
+                logger.error(f"Error removing {file}: {e}")
 
-        print("Program terminated")
+        logger.info("Program terminated")
 
 if __name__ == "__main__":
     main()

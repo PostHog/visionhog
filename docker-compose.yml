@@ -32,6 +32,7 @@ services:
     volumes:
       - ./video_clips:/app/video_clips
       - ./processed_clips:/app/processed_clips
+      - ./visionhog:/app/visionhog
     environment:
       - USE_MINIO=true
       - S3_BUCKET=posthog-vision
