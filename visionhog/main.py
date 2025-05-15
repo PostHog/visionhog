@@ -40,12 +40,34 @@ PROCESSED_DIR = Path("processed_clips")  # For clips that have been analyzed
 MAX_CLIPS_TO_KEEP = 100  # Maximum number of clips to store
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 CHUNK_DURATION = 10  # Duration of each clip in seconds
+
+# Storage configuration
+USE_MINIO = os.getenv("USE_MINIO", "true").lower() == "true"
 S3_BUCKET = os.getenv("S3_BUCKET", "posthog-vision")  # Configurable S3 bucket name
 S3_PREFIX = os.getenv("S3_PREFIX", "teams/2")  # Configurable S3 prefix
+
+# MinIO configuration
+MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://localhost:9000")
+MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
+MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
+MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
 
 # Initialize PostHog client
 posthog.api_key = POSTHOG_ENV_KEY
 posthog.host = "https://app.posthog.com"  # Update this if using self-hosted PostHog
+
+# Initialize S3/MinIO client
+if USE_MINIO:
+    s3_client = boto3.client(
+        's3',
+        endpoint_url=MINIO_ENDPOINT,
+        aws_access_key_id=MINIO_ACCESS_KEY,
+        aws_secret_access_key=MINIO_SECRET_KEY,
+        config=boto3.Config(signature_version='s3v4'),
+        verify=MINIO_SECURE
+    )
+else:
+    s3_client = boto3.client('s3')
 
 # Create FastAPI app
 app = FastAPI(title="VisionHog API")
@@ -335,6 +357,13 @@ async def get_stream(stream_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Stream not found")
     return stream
 
+def get_s3_url(key: str) -> str:
+    """Generate the appropriate S3/MinIO URL for a given key"""
+    if USE_MINIO:
+        return f"{MINIO_ENDPOINT}/{S3_BUCKET}/{key}"
+    else:
+        return f"https://{S3_BUCKET}.s3.amazonaws.com/{key}"
+
 @app.get("/teams/{team_id}/chunks", response_model=List[StreamChunkResponse])
 async def list_team_chunks(
     team_id: str,
@@ -363,9 +392,9 @@ async def list_team_chunks(
     # Enhance chunks with additional information
     enhanced_chunks = []
     for chunk in chunks:
-        # Generate S3 URLs
-        s3_video_url = f"https://{S3_BUCKET}.s3.amazonaws.com/{chunk.s3_video_key}"
-        s3_analysis_url = f"https://{S3_BUCKET}.s3.amazonaws.com/{chunk.s3_analysis_key}" if chunk.s3_analysis_key else None
+        # Generate S3/MinIO URLs
+        s3_video_url = get_s3_url(chunk.s3_video_key)
+        s3_analysis_url = get_s3_url(chunk.s3_analysis_key) if chunk.s3_analysis_key else None
 
         # Create enhanced chunk response
         enhanced_chunk = StreamChunkResponse(
@@ -418,9 +447,6 @@ PROCESSED_DIR.mkdir(exist_ok=True)
 
 # Set up Gemini
 client = genai.Client(api_key=GEMINI_API_KEY)
-
-# Set up S3 client
-s3_client = boto3.client('s3')
 
 # Create a queue for processing clips
 clip_queue = queue.Queue()
@@ -847,6 +873,9 @@ def main():
     print(f"Starting to capture {CHUNK_DURATION}-second chunks from {STREAM_URL}")
     print(f"Saving clips to {OUTPUT_DIR.absolute()}")
     print(f"Processed clips will be moved to {PROCESSED_DIR.absolute()}")
+    print(f"Using {'MinIO' if USE_MINIO else 'S3'} for storage")
+    if USE_MINIO:
+        print(f"MinIO endpoint: {MINIO_ENDPOINT}")
     print("Press Ctrl+C to stop capturing")
 
     try:

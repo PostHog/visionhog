@@ -12,3 +12,54 @@ services:
     volumes:
       - ./srs:/usr/local/srs/conf
     restart: unless-stopped
+    networks:
+      - visionhog_network
+
+  minio:
+    image: minio/minio
+    ports:
+      - "9000:9000"  # API
+      - "9001:9001"  # Console
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    restart: unless-stopped
+    networks:
+      - visionhog_network
+
+  visionhog:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8069:8069"
+    volumes:
+      - ./video_clips:/app/video_clips
+      - ./processed_clips:/app/processed_clips
+    environment:
+      - USE_MINIO=true
+      - S3_BUCKET=posthog-vision
+      - S3_PREFIX=teams/2
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_SECURE=false
+      - STREAM_URL=http://srs:8080/live/show.flv
+      - POSTHOG_ENV_KEY=${POSTHOG_ENV_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    depends_on:
+      - srs
+      - minio
+    restart: unless-stopped
+    networks:
+      - visionhog_network
+
+networks:
+  visionhog_network:
+    driver: bridge
+
+volumes:
+  minio_data:
