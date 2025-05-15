@@ -507,6 +507,19 @@ def analyze_with_gemini(video_path, db: Session):
         if stream is None:
             raise Exception("No stream configuration found for team 2")
 
+        # Get current UTC time
+        current_utc = datetime.datetime.now(datetime.timezone.utc)
+        utc_timestamp = current_utc.strftime("%Y-%m-%d %H:%M:%S UTC")
+
+        # Append timestamp instructions to the prompt
+        timestamp_instructions = f"""
+IMPORTANT: The current UTC time is {utc_timestamp}. Use this as the reference time for all timestamps in your analysis.
+For each event, calculate the actual UTC timestamp by adding the video timestamp to this reference time.
+For example, if an event occurs at 00:01:20 in the video, and the reference time is {utc_timestamp},
+the actual UTC timestamp would be {current_utc + datetime.timedelta(seconds=80)}.
+Include both the video timestamp (HH:MM:SS) and the calculated UTC timestamp in the properties of each event.
+"""
+
         # Send to Gemini for analysis using new API format
         response = client.models.generate_content(
             model='models/gemini-2.0-flash',
@@ -515,7 +528,7 @@ def analyze_with_gemini(video_path, db: Session):
                     types.Part(
                         inline_data=types.Blob(data=video_bytes, mime_type='video/mp4')
                     ),
-                    types.Part(text=stream.prompt)
+                    types.Part(text=stream.prompt + timestamp_instructions)
                 ]
             )
         )
